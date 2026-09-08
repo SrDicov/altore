@@ -18,8 +18,8 @@ checksum=SKIP
 depends="curl>=0 tar>=0 gzip>=0 coreutils>=0 findutils>=0 gawk>=0 grep>=0 sed>=0"
 
 do_install() {
-	vbin src/altore altore
-	ln -s altore ${DESTDIR}/usr/bin/atl
+	vbin src/alt alt
+	ln -s alt ${DESTDIR}/usr/bin/altore
 	vdoc README.md
 	vdoc docs/08-cli.md
 	vmkdir usr/share/examples/altore

@@ -3,9 +3,9 @@
 # v1: shell POSIX, store deduplicado por hash, ejecución directa (sin
 # montajes, sin root, sin daemon, sin sandbox). Ver docs/08-cli.md.
 #
-# Uso: atl [-s TXT] | [-i PKG] | [-R PKG] | [-r PKG [ARGS...]] | [-I PKG]
+# Uso: alt [-s TXT] | [-i PKG] | [-R PKG] | [-r PKG [ARGS...]] | [-I PKG]
 #          | [-l] | [-lg [REPO]] | [-u [PKG]] | [-h] | [-v] | doctor | gc
-#      atl PALABRA ... | atl PKG [ARGS...]
+#      alt PALABRA ... | alt PKG [ARGS...]
 # Códigos: 0 ok · 1 error operativo · 2 uso incorrecto · 3 sin resultados ·
 #          4 red/descarga/verificación.
 # shellcheck disable=SC1090
@@ -30,10 +30,10 @@ TMPD=""
 
 # ---------- utilidades ----------
 
-die()  { printf 'atl: error: %s\n' "$*" >&2; exit 1; }
-warn() { printf 'atl: aviso: %s\n' "$*" >&2; }
-note() { printf 'atl: %s\n' "$*" >&2; }
-usage_err() { printf 'atl: %s\natl: usa `atl -h` para ayuda.\n' "$*" >&2; exit 2; }
+die()  { printf 'alt: error: %s\n' "$*" >&2; exit 1; }
+warn() { printf 'alt: aviso: %s\n' "$*" >&2; }
+note() { printf 'alt: %s\n' "$*" >&2; }
+usage_err() { printf 'alt: %s\natl: usa `alt -h` para ayuda.\n' "$*" >&2; exit 2; }
 
 need_cmd() {
     command -v "$1" >/dev/null 2>&1 || die "falta herramienta requerida: $1"
@@ -58,14 +58,14 @@ ensure_dirs() {
 # propio  https://repo.ejemplo.com/altore
 # demo    file:///ruta/a/repo
 EOF
-        note "creado $ALTORE_REPOS (añade repos y ejecuta \`atl -u\`)"
+        note "creado $ALTORE_REPOS (añade repos y ejecuta \`alt -u\`)"
     fi
 }
 
 # Ruta de este programa (para los shims).
 self_path() {
-    if command -v altore >/dev/null 2>&1 && [ "$(command -v altore)" != "$0" ]; then
-        command -v altore
+    if command -v alt >/dev/null 2>&1 && [ "$(command -v alt)" != "$0" ]; then
+        command -v alt
     elif command -v readlink >/dev/null 2>&1; then
         readlink -f "$0" 2>/dev/null || printf '%s' "$0"
     else
@@ -148,7 +148,7 @@ ensure_index() {
     fi
     if [ -f "$ALTORE_HOME/.last-sync" ] && \
        find "$ALTORE_HOME/.last-sync" -mtime +7 2>/dev/null | grep -q .; then
-        warn "índices de hace >7 días; ejecuta \`atl -u\` para refrescar"
+        warn "índices de hace >7 días; ejecuta \`alt -u\` para refrescar"
     fi
 }
 
@@ -449,7 +449,7 @@ EOF
 do_remove() {
     _r=$(resolve_installed "$1")
     case "$_r" in
-        NONE) printf 'atl: "%s" no está instalado.\n' "$1" >&2; return 3 ;;
+        NONE) printf 'alt: "%s" no está instalado.\n' "$1" >&2; return 3 ;;
         CANCEL) note "cancelado"; return 0 ;;
     esac
     _name=$(printf '%s' "$_r" | cut -f1)
@@ -465,7 +465,7 @@ do_remove() {
     done
     IFS="$_oldifs"
     rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/applications/$_name-altore.desktop"
-    printf 'desinstalado %s (config de usuario intacta; ejecuta `atl gc` para liberar disco)\n' "$_name"
+    printf 'desinstalado %s (config de usuario intacta; ejecuta `alt gc` para liberar disco)\n' "$_name"
     return 0
 }
 
@@ -476,7 +476,7 @@ cmd_search() {
     _t=$(mktmp)
     match "$1" >"$_t/cand"
     if [ ! -s "$_t/cand" ]; then
-        printf 'atl: sin resultados para "%s" (prueba `atl -u` para refrescar índices).\n' "$1" >&2
+        printf 'alt: sin resultados para "%s" (prueba `alt -u` para refrescar índices).\n' "$1" >&2
         return 3
     fi
     awk -F'\t' '{printf "%s  %s  [%s]  — %s\n", $2, $3, $4, $5}' "$_t/cand"
@@ -488,7 +488,7 @@ cmd_install() {
     _r=$(resolve_all "$1")
     case "$_r" in
         NONE)
-            printf 'atl: paquete "%s" no encontrado en ningún repo.\n' "$1" >&2
+            printf 'alt: paquete "%s" no encontrado en ningún repo.\n' "$1" >&2
             return 3 ;;
         CANCEL) note "cancelado, no se instala nada"; return 0 ;;
     esac
@@ -519,7 +519,7 @@ cmd_run() {
     _r=$(resolve_all "$_app")
     case "$_r" in
         NONE)
-            printf 'atl: "%s" no está instalado ni existe en los repos.\n' "$_app" >&2
+            printf 'alt: "%s" no está instalado ni existe en los repos.\n' "$_app" >&2
             return 3 ;;
         CANCEL) note "cancelado"; return 0 ;;
     esac
@@ -534,7 +534,7 @@ cmd_info() {
     ensure_index
     _r=$(resolve_all "$1")
     case "$_r" in
-        NONE) printf 'atl: paquete "%s" no encontrado en ningún repo.\n' "$1" >&2; return 3 ;;
+        NONE) printf 'alt: paquete "%s" no encontrado en ningún repo.\n' "$1" >&2; return 3 ;;
         CANCEL) note "cancelado"; return 0 ;;
     esac
     _name=$(printf '%s' "$_r" | cut -f1)
@@ -556,7 +556,7 @@ cmd_info() {
     if [ -n "$_have" ]; then
         printf 'estado:      instalado (%s)\n' "$_have"
     else
-        printf 'estado:      no instalado (instalable con: atl -i %s)\n' "$_name"
+        printf 'estado:      no instalado (instalable con: alt -i %s)\n' "$_name"
     fi
     return 0
 }
@@ -578,7 +578,7 @@ cmd_list() {
         _tot=$((_tot+$(printf '%s' "$_info" | cut -f4)))
     done
     if [ "$_n" -eq 0 ]; then
-        note "nada instalado (prueba \`atl -s <texto>\`)"
+        note "nada instalado (prueba \`alt -s <texto>\`)"
     else
         printf 'total: %d paquetes, %s\n' "$_n" "$(human_size "$_tot")"
     fi
@@ -589,7 +589,7 @@ cmd_listg() {
     ensure_index
     if [ -n "${1:-}" ]; then
         awk -F'\t' -v r="$1" '$1==r {printf "%s  %s  — %s\n", $2, $3, $4; f=1} END{exit !f}' "$INDEX" && return 0
-        printf 'atl: repo "%s" desconocido. Repos:\n' "$1" >&2
+        printf 'alt: repo "%s" desconocido. Repos:\n' "$1" >&2
         repo_list | awk '{print "  "$1}' >&2
         return 3
     fi
@@ -604,7 +604,7 @@ cmd_update() {
         _r=$(resolve_installed "$1")
         case "$_r" in
             NONE)
-                printf 'atl: "%s" no está instalado (¿quisiste `atl -i %s`?).\n' "$1" "$1" >&2
+                printf 'alt: "%s" no está instalado (¿quisiste `alt -i %s`?).\n' "$1" "$1" >&2
                 return 3 ;;
             CANCEL) note "cancelado"; return 0 ;;
         esac
@@ -703,21 +703,21 @@ cmd_gc() {
 
 cmd_help() {
     cat <<'EOF'
-atl / altore — software glibc en PCs musl. Ligero, instantáneo, simple.
+alt / altore — software glibc en PCs musl. Ligero, instantáneo, simple.
 
 Uso:
-  atl -s TEXTO        buscar paquetes en todos los repos
-  atl -i PAQUETE      instalar (con sugerencias si no es exacto)
-  atl -R PAQUETE      desinstalar (no toca tu config; luego `atl gc`)
-  atl -r PAQUETE [ARGS...]   ejecutar (o simplemente: atl PAQUETE ...)
-  atl -I PAQUETE      ficha del paquete (versión, repo, tamaño, estado)
-  atl -l              listar instalados
-  atl -lg [REPO]      listar disponibles (todos o de un repo)
-  atl -u [PAQUETE]    actualizar todo (o solo uno)
-  atl -h              esta ayuda
-  atl -v              versión de altore
-  atl doctor          diagnosticar el PC (GPU, espacio, red, herramientas)
-  atl gc              borrar archivos huérfanos del store
+  alt -s TEXTO        buscar paquetes en todos los repos
+  alt -i PAQUETE      instalar (con sugerencias si no es exacto)
+  alt -R PAQUETE      desinstalar (no toca tu config; luego `alt gc`)
+  alt -r PAQUETE [ARGS...]   ejecutar (o simplemente: alt PAQUETE ...)
+  alt -I PAQUETE      ficha del paquete (versión, repo, tamaño, estado)
+  alt -l              listar instalados
+  alt -lg [REPO]      listar disponibles (todos o de un repo)
+  alt -u [PAQUETE]    actualizar todo (o solo uno)
+  alt -h              esta ayuda
+  alt -v              versión de altore
+  alt doctor          diagnosticar el PC (GPU, espacio, red, herramientas)
+  alt gc              borrar archivos huérfanos del store
 
 Alias de palabra: search install remove run info information list listg
 update help version doctor gc.  Opciones largas: --search --install
@@ -726,10 +726,10 @@ update help version doctor gc.  Opciones largas: --search --install
 Toda elección numerada acepta 1..N o n (ninguno).
 Solo -i y -u tocan la red. Env: ALTORE_HOME ALTORE_BIN ALTORE_REPOS.
 Ejemplos:
-  atl -s brave
-  atl -i brave-bin
-  atl brave
-  atl -u
+  alt -s brave
+  alt -i brave-bin
+  alt brave
+  alt -u
 EOF
     return 0
 }
@@ -759,7 +759,7 @@ main() {
         -h|--help|help)
             cmd_help ;;
         -v|--version|version)
-            printf 'altore %s (%s)\n' "$ALTORE_VERSION" "$(uname -m)" ;;
+            printf 'alt %s (%s)\n' "$ALTORE_VERSION" "$(uname -m)" ;;
         doctor|--doctor)
             cmd_doctor ;;
         gc|--gc)

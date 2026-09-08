@@ -1,20 +1,20 @@
-# 08 — Spec CLI `atl`/`altore` (v1, congelada)
+# 08 — Spec CLI `alt`/`altore` (v1, congelada)
 
 Gramática, semántica y códigos de salida. Cambiar este archivo = cambiar el
-contrato con el usuario; requiere actualizar `src/altore`, `atl -h` y tests.
+contrato con el usuario; requiere actualizar `src/alt`, `alt -h` y tests.
 
 ## 0. Invocación
 
 ```
-atl [-s TXT] | [-i PKG] | [-R PKG] | [-r PKG [ARGS...]]
+alt [-s TXT] | [-i PKG] | [-R PKG] | [-r PKG [ARGS...]]
     | [-I PKG] | [-l] | [-lg [REPO]] | [-u [PKG]]
     | [-h] | [-v] | doctor | gc
-atl PALABRA ...   (alias: search install remove run info information
+alt PALABRA ...   (alias: search install remove run info information
                    list listg update help version doctor gc)
-atl PKG [ARGS...] (atajo de run)
+alt PKG [ARGS...] (atajo de run)
 ```
 
-- `atl` y `altore` son el mismo programa (dos nombres en el `.xbps`).
+- `alt` y `altore` son el mismo programa (dos nombres en el `.xbps`).
 - Opciones largas equivalentes: `--search --install --remove --run --info
   --information --list --listg --update --help --version --doctor --gc`.
 - No hay flags cortos combinados (`-si` no existe; error de uso, código 2).
@@ -51,7 +51,7 @@ Borra `apps/<nombre>/`, shim y `.desktop`. No toca el store (`gc` lo hace).
 Config del usuario (`~/.config`, `~/.cache` de la app) **no se toca nunca**.
 Sugiere `gc` si quedan blobs huérfanos.
 
-### `-r PKG [ARGS...]` / `run PKG` / `atl PKG` — ejecutar
+### `-r PKG [ARGS...]` / `run PKG` / `alt PKG` — ejecutar
 Instalado → `exec` de su `AppRun` con entorno saneado (se borran
 `LD_LIBRARY_PATH`, `GCONV_PATH`, `GDK_PIXBUF_MODULE_FILE` heredados) + `ARGS`.
 No instalado → flujo `-i` (búsqueda + prompt) y, si instala, ejecuta en la
@@ -61,7 +61,7 @@ misma invocación. Fallo de lanzamiento → mensaje + `doctor` sugerido.
 Resuelve contra **todo el índice** (no necesita estar instalado). Muestra:
 nombre, descripción (larga si existe), versión disponible, repo, tamaño,
 sha256 (recortado), binarios que exporta, estado: `instalado <v>` o
-`no instalado` (+ `instalable con: atl -i <nombre>`). Único comando de
+`no instalado` (+ `instalable con: alt -i <nombre>`). Único comando de
 información por paquete: **`-v` nunca acepta paquete**.
 
 ### `-l` / `list` — instalados
@@ -76,7 +76,7 @@ Sin args: sincroniza índices y actualiza **todo** lo instalado con versión
 mayor disponible, uno por uno; conserva la vieja hasta verificar la nueva;
 resume por paquete al final (`actualizados N, al día M, fallidos K`).
 Con `PKG`: resuelve **contra lo instalado** (motor `-s`; ambiguo → numerada);
-no instalado → error accionable (`usa atl -i`, código 3); al día → lo dice
+no instalado → error accionable (`usa alt -i`, código 3); al día → lo dice
 (código 0).
 Índices: `update` siempre los refresca primero (único comando que toca red
 además de `-i`).
@@ -112,4 +112,4 @@ instaladas. Código 0 siempre (con `nada que limpiar` si aplica).
 
 `-s/-I/-l/-lg` **nunca tocan red**: usan el índice local. `update` refresca;
 `-i` refresca solo si no hay índice. TTL sugerido: aviso `índices de hace >7
-días, ejecuta atl -u` en `-s` sin resultados.
+días, ejecuta alt -u` en `-s` sin resultados.

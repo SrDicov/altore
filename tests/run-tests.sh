@@ -6,7 +6,7 @@ set -u
 
 HERE=$(dirname "$0")
 ROOT=$(readlink -f "$HERE/.." 2>/dev/null || (cd "$HERE/.." && pwd))
-ALT="$ROOT/src/altore"
+ALT="$ROOT/src/alt"
 PASS=0; FAIL=0
 
 T=$(mktemp -d "${TMPDIR:-/tmp}/altore-test.XXXXXX")
@@ -39,10 +39,10 @@ A -i brave-bin >/dev/null 2>&1; is_eq "install brave-bin rc" "0" "$?"
 [ -x "$ALTORE_HOME/apps/brave-bin/AppRun" ] && ok "AppRun instalado" || bad "AppRun instalado"
 [ -x "$ALTORE_BIN/brave" ] && [ -x "$ALTORE_BIN/brave-browser" ] && ok "shims brave" || bad "shims brave"
 out=$("$ALTORE_BIN/brave" hola 2>&1); is_eq "shim ejecuta y pasa args" "HELLO brave-bin 1.0 args:hola" "$out"
-out=$(A brave mundo 2>&1); is_eq "atl PKG atajo run" "HELLO brave-bin 1.0 args:mundo" "$out"
+out=$(A brave mundo 2>&1); is_eq "alt PKG atajo run" "HELLO brave-bin 1.0 args:mundo" "$out"
 out=$(A -l 2>&1); contains "list muestra brave-bin" "brave-bin  1.0" "$out"
 out=$(A -I freetube 2>&1); contains "info freetube no instalado" "no instalado" "$out"
-contains "info freetube sugiere -i" "atl -i freetube" "$out"
+contains "info freetube sugiere -i" "alt -i freetube" "$out"
 
 # 3. install con picker (un candidato inexacto) + cancelación con n
 out=$(printf '1\n' | A -i tube 2>&1); is_eq "install tube eligiendo 1" "0" "$?"
@@ -80,7 +80,7 @@ A -u >/dev/null 2>&1  # re-sincroniza tras regenerar fixtures
 out=$(A -lg 2>&1); contains "listg agrupa por repo" "== demo ==" "$out"
 out=$(A -lg demo 2>&1); contains "listg demo filtra" "freetube" "$out"
 A -lg norepo >/dev/null 2>&1; is_eq "listg repo malo rc=3" "3" "$?"
-out=$(A -v 2>&1); contains "version" "altore 0.1.0" "$out"
+out=$(A -v 2>&1); contains "version" "alt 0.1.0" "$out"
 A -h >/dev/null 2>&1; is_eq "help rc" "0" "$?"
 A --bogus >/dev/null 2>&1; is_eq "flag desconocido rc=2" "2" "$?"
 A --doctor >/dev/null 2>&1; is_eq "long --doctor rc" "0" "$?"

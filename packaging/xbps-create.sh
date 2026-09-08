@@ -10,7 +10,7 @@ ROOT=$(readlink -f "$HERE/.." 2>/dev/null || (cd "$HERE/.." && pwd))
 OUTDIR="$ROOT"
 [ "${1:-}" = "--outdir" ] && { OUTDIR="$2"; mkdir -p "$OUTDIR"; }
 
-VER=$(grep '^ALTORE_VERSION=' "$ROOT/src/altore" | cut -d'"' -f2)
+VER=$(grep '^ALTORE_VERSION=' "$ROOT/src/alt" | cut -d'"' -f2)
 [ -n "$VER" ] || { echo "no se pudo leer versión" >&2; exit 1; }
 REV=1
 ARCH=$(xbps-uhelper arch 2>/dev/null || uname -m)
@@ -35,8 +35,8 @@ WORK="$ROOT/packaging/work/destdir"
 rm -rf "$WORK"
 mkdir -p "$WORK/usr/bin" "$WORK/usr/share/doc/altore" \
          "$WORK/usr/share/examples/altore"
-install -m755 "$ROOT/src/altore" "$WORK/usr/bin/altore"
-ln -s altore "$WORK/usr/bin/atl"
+install -m755 "$ROOT/src/alt" "$WORK/usr/bin/alt"
+ln -s alt "$WORK/usr/bin/altore"
 cp "$ROOT/README.md" "$ROOT/docs/08-cli.md" "$WORK/usr/share/doc/altore/"
 printf '# Repos de Altore: "<nombre> <url-raíz>" (un repo por línea).\n# La raíz contiene index.tsv + pool/. Acepta https:// y file://.\n' \
     >"$WORK/usr/share/examples/altore/repos.conf.example"

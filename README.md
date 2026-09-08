@@ -4,30 +4,30 @@ Ejecuta software glibc en PCs con musl. Ligero, instantáneo, simple.
 
 ```bash
 sudo xbps-install -Sy altore   # una vez (añade repo + clave según SIGNING.md)
-atl -s brave                   # buscar en todos los repos
-atl -i brave-bin               # instalar (con sugerencias si no es exacto)
+alt -s brave                   # buscar en todos los repos
+alt -i brave-bin               # instalar (con sugerencias si no es exacto)
 brave                          # abrir, al instante, siempre
 ```
 
 Sin contenedores, sin sandbox, sin root para usar, sin compilar, sin tiendas
-pesadas. Todo vive bajo tu `$HOME`; `atl -R` desinstala y `atl gc` libera.
+pesadas. Todo vive bajo tu `$HOME`; `alt -R` desinstala y `alt gc` libera.
 
 ## Comandos
 
 ```
-atl -s TEXTO        buscar paquetes en todos los repos
-atl -i PAQUETE      instalar (lista numerada si hay dudas, n=cancela)
-atl -R PAQUETE      desinstalar (tu config intacta)
-atl -r PAQUETE [ARGS...] / atl PAQUETE ...   ejecutar (si falta, lo busca e instala)
-atl -I PAQUETE      ficha del paquete (versión, repo, tamaño, estado)
-atl -l              listar instalados
-atl -lg [REPO]      listar disponibles (todos o de un repo)
-atl -u [PAQUETE]    actualizar todo (o solo uno)
-atl -h / atl -v     ayuda / versión
-atl doctor / atl gc diagnosticar el PC / limpiar disco huérfano
+alt -s TEXTO        buscar paquetes en todos los repos
+alt -i PAQUETE      instalar (lista numerada si hay dudas, n=cancela)
+alt -R PAQUETE      desinstalar (tu config intacta)
+alt -r PAQUETE [ARGS...] / alt PAQUETE ...   ejecutar (si falta, lo busca e instala)
+alt -I PAQUETE      ficha del paquete (versión, repo, tamaño, estado)
+alt -l              listar instalados
+alt -lg [REPO]      listar disponibles (todos o de un repo)
+alt -u [PAQUETE]    actualizar todo (o solo uno)
+alt -h / alt -v     ayuda / versión
+alt doctor / alt gc diagnosticar el PC / limpiar disco huérfano
 ```
 
-`atl` y `altore` son lo mismo. Detalle congelado en `docs/08-cli.md`.
+`alt` y `altore` son lo mismo. Detalle congelado en `docs/08-cli.md`.
 
 ## Documentación
 
@@ -53,7 +53,7 @@ sh packaging/xbps-create.sh --outdir repo/  # altore-V_R.arch.xbps
 sh packaging/sign-repo.sh repo/             # firma + clave pública
 ```
 
-Estructura: `src/altore` (el CLI, shell POSIX, sin dependencias raras) ·
+Estructura: `src/alt` (el CLI, shell POSIX, sin dependencias raras) ·
 `tests/` (fixtures + suite) · `packaging/` (template void-packages en
 `packaging/void-packages/`, build directo, firmado) ·
 `.github/workflows/` (CI: lint + tests + build `.xbps`).

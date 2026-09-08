@@ -13,17 +13,17 @@ jobs:
       - name: Instala shellcheck
         run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
       - name: shellcheck
-        run: shellcheck -S warning src/altore tests/*.sh packaging/*.sh
+        run: shellcheck -S warning src/alt tests/*.sh packaging/*.sh
       - name: Sintaxis sh/dash/bash
         run: |
-          sh -n src/altore
-          bash -n src/altore
+          sh -n src/alt
+          bash -n src/alt
       - name: Sin bashismos conocidos
         # ${v:-x} ${v#x} etc. son POSIX; esto caza ${@:n} y ${v:n[:m]}.
         # (shellcheck, con shebang #!/bin/sh, caza el resto: [[, //, etc.)
         run: |
-          ! grep -nE '\$\{@|\$\{[^}:]+:[0-9 ]' src/altore || \
-            (echo "posible bashismo en src/altore" >&2; exit 1)
+          ! grep -nE '\$\{@|\$\{[^}:]+:[0-9 ]' src/alt || \
+            (echo "posible bashismo en src/alt" >&2; exit 1)
       - name: Template void-packages mínimo
         run: |
           t=packaging/void-packages/srcpkgs/altore/template
@@ -54,7 +54,7 @@ jobs:
         run: |
           f=$(ls dist/*.xbps)
           tar -tf "$f" | grep -qx './usr/bin/altore'
-          tar -tf "$f" | grep -qx './usr/bin/atl'
+          tar -tf "$f" | grep -qx './usr/bin/alt'
           tar -tf "$f" | grep -qx './props.plist'
           echo "contenido OK: $f"
       - uses: actions/upload-artifact@v4

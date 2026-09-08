@@ -45,8 +45,8 @@ indicación): `/home/dicov/Conty` (fallback universal),
 - `README.md` índice; `docs/01..09` el proyecto por capas (qué → por qué →
   objetivos → mecanismo → arquitectura → roadmap → glosario → **spec CLI** →
   **formato repos**). `08-cli.md` es contrato congelado: cambiarlo exige
-  actualizar `src/altore`, `atl -h` y `tests/`.
-- `src/altore` (shell POSIX, ejecutable): único artefacto runtime. Sin
+  actualizar `src/alt`, `alt -h` y `tests/`.
+- `src/alt` (shell POSIX, ejecutable): único artefacto runtime. Sin
   bashismos (`/bin/sh` aquí es `dash`), sin `jq`/`python` en cliente (índice
   TSV + `awk`). Probar siempre con `sh -n`, `bash -n` y `tests/run-tests.sh`
   (40 pruebas; todo cambio trae su prueba).

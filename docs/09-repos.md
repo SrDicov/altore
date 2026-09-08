@@ -5,7 +5,7 @@ propio del equipo) y cómo lo consume el cliente sin dependencias extra.
 
 ## 1. Decisión base: índice TSV, cero dependencias en cliente
 
-El cliente (`src/altore`, shell POSIX) **no usa `jq` ni `python`**: el índice
+El cliente (`src/alt`, shell POSIX) **no usa `jq` ni `python`**: el índice
 que viaja y se cachea es `index.tsv` (tabuladores, UTF-8, una línea por
 paquete). Se parsea con `awk`. Quien prefiera mantener catálogo en JSON usa
 la herramienta `tools/json2tsv.sh` (requiere `jq`, solo en el lado
