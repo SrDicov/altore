@@ -1,0 +1,2 @@
+#!/bin/sh
+echo "BIN brave-nightly running"

@@ -1,0 +1,29 @@
+# Template file for 'altore'
+# Plantilla para compilar en void-packages (xbps-src):
+#   cp -r packaging/void-packages/srcpkgs/altore <void-packages>/srcpkgs/
+#   cd <void-packages> && ./xbps-src pkg altore
+# El tarball de GitHub release debe coincidir con version+revision;
+# actualizar checksum con `./xbps-src update-checksum altore`.
+pkgname=altore
+version=0.1.0
+revision=1
+archs="x86_64* aarch64*"
+build_style=meta
+short_desc="Software glibc en PCs musl: ligero, instantáneo, simple"
+maintainer="SrDicov <SrDicov@users.noreply.github.com>"
+license="MIT"
+homepage="https://github.com/SrDicov/altore"
+distfiles="https://github.com/SrDicov/altore/archive/refs/tags/v${version}.tar.gz"
+checksum=SKIP
+depends="curl>=0 tar>=0 gzip>=0 coreutils>=0 findutils>=0 gawk>=0 grep>=0 sed>=0"
+
+do_install() {
+	vbin src/altore altore
+	ln -s altore ${DESTDIR}/usr/bin/atl
+	vdoc README.md
+	vdoc docs/08-cli.md
+	vmkdir usr/share/examples/altore
+	printf '# Repos de Altore: "<nombre> <url-raíz>" (un repo por línea).\n# La raíz contiene index.tsv + pool/. Acepta https:// y file://.\n' \
+		> ${DESTDIR}/usr/share/examples/altore/repos.conf.example
+	vlicense LICENSE
+}

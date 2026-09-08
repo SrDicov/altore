@@ -1,0 +1,11 @@
+# Generados
+tests/fixture/
+*.xbps
+*.xbps.sig2
+packaging/work/
+packaging/keys/altore-priv.pem
+packaging/keys/tmp.pem
+# Restos de pruebas locales
+/tmp/altore.*
+# Sistema
+.DS_Store

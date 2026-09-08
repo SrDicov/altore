@@ -1,0 +1,754 @@
+#!/bin/sh
+# altore — ejecuta software glibc en PCs musl. Ligero, instantáneo, simple.
+# v1: shell POSIX, store deduplicado por hash, ejecución directa (sin
+# montajes, sin root, sin daemon, sin sandbox). Ver docs/08-cli.md.
+#
+# Uso: atl [-s TXT] | [-i PKG] | [-R PKG] | [-r PKG [ARGS...]] | [-I PKG]
+#          | [-l] | [-lg [REPO]] | [-u [PKG]] | [-h] | [-v] | doctor | gc
+#      atl PALABRA ... | atl PKG [ARGS...]
+# Códigos: 0 ok · 1 error operativo · 2 uso incorrecto · 3 sin resultados ·
+#          4 red/descarga/verificación.
+
+set -u
+
+ALTORE_VERSION="0.1.0"
+
+: "${ALTORE_HOME:=$HOME/.local/share/altore}"
+: "${ALTORE_BIN:=$HOME/.local/bin}"
+: "${ALTORE_REPOS:=$ALTORE_HOME/repos.conf}"
+
+STORE="$ALTORE_HOME/store"
+APPS="$ALTORE_HOME/apps"
+CACHE="$ALTORE_HOME/cache"
+REPOSD="$ALTORE_HOME/repos"
+INDEX="$ALTORE_HOME/index.tsv"
+
+TMPD=""
+
+# ---------- utilidades ----------
+
+die()  { printf 'atl: error: %s\n' "$*" >&2; exit 1; }
+warn() { printf 'atl: aviso: %s\n' "$*" >&2; }
+note() { printf 'atl: %s\n' "$*" >&2; }
+usage_err() { printf 'atl: %s\natl: usa `atl -h` para ayuda.\n' "$*" >&2; exit 2; }
+
+need_cmd() {
+    command -v "$1" >/dev/null 2>&1 || die "falta herramienta requerida: $1"
+}
+
+cleanup() { [ -n "$TMPD" ] && [ -d "$TMPD" ] && rm -rf "$TMPD"; }
+trap cleanup EXIT INT TERM
+
+mktmp() {
+    TMPD="${TMPD:-$(mktemp -d "${TMPDIR:-/tmp}/altore.XXXXXX")}"
+    printf '%s' "$TMPD"
+}
+
+ensure_dirs() {
+    mkdir -p "$STORE" "$APPS" "$CACHE" "$REPOSD" "$ALTORE_BIN" || \
+        die "no puedo crear directorios en $ALTORE_HOME"
+    if [ ! -f "$ALTORE_REPOS" ]; then
+        cat >"$ALTORE_REPOS" <<'EOF'
+# Repos de Altore: "<nombre> <url-raíz>" (un repo por línea).
+# La raíz contiene index.tsv + pool/. Acepta https:// y file://.
+# Ejemplo:
+# propio  https://repo.ejemplo.com/altore
+# demo    file:///ruta/a/repo
+EOF
+        note "creado $ALTORE_REPOS (añade repos y ejecuta \`atl -u\`)"
+    fi
+}
+
+# Ruta de este programa (para los shims).
+self_path() {
+    if command -v altore >/dev/null 2>&1 && [ "$(command -v altore)" != "$0" ]; then
+        command -v altore
+    elif command -v readlink >/dev/null 2>&1; then
+        readlink -f "$0" 2>/dev/null || printf '%s' "$0"
+    else
+        printf '%s' "$0"
+    fi
+}
+
+# ---------- repos e índices ----------
+
+# Lista "nombre url" de repos.conf (sin comentarios/vacías).
+repo_list() {
+    [ -f "$ALTORE_REPOS" ] || return 0
+    grep -v '^[[:space:]]*#' "$ALTORE_REPOS" 2>/dev/null | \
+        grep -v '^[[:space:]]*$' | awk '{print $1, $2}'
+}
+
+sync_repo() {
+    _name="$1"; _url="$2"
+    _dest="$REPOSD/$_name.index.tsv"
+    case "$_url" in
+        file://*)
+            _src="${_url#file://}/index.tsv"
+            [ -f "$_src" ] || { warn "repo $_name: no existe $_src"; return 1; }
+            cp -f "$_src" "$_dest" || return 1
+            ;;
+        http://*|https://*)
+            need_cmd curl
+            curl -fSL --retry 2 -o "$_dest" "$_url/index.tsv" 2>/dev/null || \
+                { warn "repo $_name: no se pudo descargar índice"; return 1; }
+            ;;
+        *) warn "repo $_name: URL no soportada: $_url"; return 1 ;;
+    esac
+    return 0
+}
+
+# Sincroniza todos los repos y reconstruye el índice unificado.
+# Unificado: repo nombre versión desc tamaño sha url bins (TSV, 8 cols).
+sync_all() {
+    ensure_dirs
+    _ok=0; _fail=0
+    while read -r _rn _ru; do
+        [ -n "${_rn:-}" ] || continue
+        if sync_repo "$_rn" "$_ru"; then _ok=$((_ok+1)); else _fail=$((_fail+1)); fi
+    done <<EOF
+$(repo_list)
+EOF
+    : >"$INDEX"
+    for _f in "$REPOSD"/*.index.tsv; do
+        [ -f "$_f" ] || continue
+        _rn=$(basename "$_f" .index.tsv)
+        awk -F'\t' -v r="$_rn" 'NF>=7 {print r"\t"$0}' "$_f" >>"$INDEX"
+    done
+    _n=$(wc -l <"$INDEX" 2>/dev/null || echo 0)
+    note "índices: $_ok ok, $_fail fallidos; $_n paquetes conocidos"
+    [ "$_fail" -gt 0 ] && [ "$_ok" -eq 0 ] && return 1
+    return 0
+}
+
+ensure_index() {
+    if [ ! -s "$INDEX" ]; then
+        note "sin índice local, sincronizando repos..."
+        sync_all || die "no se pudo sincronizar ningún repo (revisa $ALTORE_REPOS y la red)"
+        [ -s "$INDEX" ] || die "los repos no ofrecen paquetes"
+    fi
+    if find "$INDEX" -mtime +7 2>/dev/null | grep -q .; then
+        warn "índices de hace >7 días; ejecuta \`atl -u\` para refrescar"
+    fi
+}
+
+# ---------- búsqueda ----------
+
+# match <query> [fichero-índice] → "score\tnombre\tversión\trepo\tdesc"
+# Motor: exacto 100 > prefijo 80 > subcadena-nombre 60 > subcadena-desc 30.
+match() {
+    _q="$1"; _idx="${2:-$INDEX}"
+    awk -F'\t' -v q="$_q" '
+    function norm(s){ s=tolower(s); gsub(/[_ ]/,"-",s); return s }
+    BEGIN{ nq=norm(q); }
+    {
+        repo=$1; name=$2; ver=$3; desc=$4
+        nn=norm(name); nd=norm(desc); score=0
+        if (nn==nq) score=100
+        else if (index(nn,nq)==1) score=80
+        else if (index(nn,nq)>0) score=60
+        else if (index(nd,nq)>0) score=30
+        if (score>0) printf "%d\t%s\t%s\t%s\t%s\n", score, name, ver, repo, desc
+    }' "$_idx" | sort -k1,1rn -k2,2 | head -20
+}
+
+# Fila exacta "nombre" en índice unificado (primera coincidencia).
+exact_line() {
+    _q="$1"; _idx="${2:-$INDEX}"
+    awk -F'\t' -v q="$_q" '$2==q {print; exit}' "$_idx"
+}
+
+# pick <fichero-candidatos> → "nombre\tversión\trepo" | "CANCEL" | "NONE"
+pick() {
+    _c="$1"
+    _n=$(wc -l <"$_c" | tr -d ' ')
+    [ "$_n" -gt 0 ] || { printf 'NONE\n'; return 0; }
+    {
+        printf 'Se encontraron %s paquetes:\n' "$_n"
+        awk -F'\t' '{printf "  %d) %s  %s  [%s]  — %s\n", NR, $2, $3, $4, $5}' "$_c"
+        printf 'Elige número (n=ninguno): '
+    } >&2
+    if [ -n "${ALTORE_NONINTERACTIVE:-}" ]; then
+        printf 'CANCEL\n'; return 0
+    fi
+    read -r _ans || _ans="n"
+    case "$_ans" in
+        n|N|"") printf 'CANCEL\n'; return 0 ;;
+        *[!0-9]*)
+            printf 'CANCEL\n'; return 0 ;;
+        *)
+            if [ "$_ans" -ge 1 ] 2>/dev/null && [ "$_ans" -le "$_n" ] 2>/dev/null; then
+                awk -F'\t' -v n="$_ans" 'NR==n {printf "%s\t%s\t%s\n", $2, $3, $4}' "$_c"
+            else
+                printf 'CANCEL\n'
+            fi
+            return 0
+            ;;
+    esac
+}
+
+# resolve_all <query> → "nombre\tversión\trepo" | "CANCEL" | "NONE".
+resolve_all() {
+    _q="$1"; _t=$(mktmp)
+    _line=$(exact_line "$_q")
+    if [ -n "$_line" ]; then
+        printf '%s\n' "$_line" | awk -F'\t' '{printf "%s\t%s\t%s\n", $2, $3, $1}'
+        return 0
+    fi
+    match "$_q" >"$_t/cand"
+    if [ ! -s "$_t/cand" ]; then
+        printf 'NONE\n'; return 0
+    fi
+    pick "$_t/cand"
+}
+
+# Índice de instalados (apps/*/manifest) como pseudo-índice unificado.
+installed_index() {
+    _t=$(mktmp)
+    : >"$_t/inst.tsv"
+    for _m in "$APPS"/*/manifest; do
+        [ -f "$_m" ] || continue
+        ( name=""; version=""; repo=""; desc=""
+          # shellcheck disable=SC1090
+          . "$_m"
+          printf '%s\t%s\t%s\t%s\t\t\t\t\n' \
+              "${repo:-?}" "${name:-?}" "${version:-?}" "${desc:-}" ) >>"$_t/inst.tsv"
+    done
+    printf '%s' "$_t/inst.tsv"
+}
+
+# resolve_installed <query> → "nombre\tversión" | "NONE" | "CANCEL".
+resolve_installed() {
+    _q="$1"; _t=$(mktmp)
+    _idx=$(installed_index)
+    _line=$(exact_line "$_q" "$_idx")
+    if [ -n "$_line" ]; then
+        printf '%s\n' "$_line" | awk -F'\t' '{printf "%s\t%s\n", $2, $3}'
+        return 0
+    fi
+    match "$_q" "$_idx" >"$_t/cand"
+    [ -s "$_t/cand" ] || { printf 'NONE\n'; return 0; }
+    _p=$(pick "$_t/cand")
+    case "$_p" in
+        NONE|CANCEL) printf '%s\n' "$_p" ;;
+        *) printf '%s\n' "$_p" | awk -F'\t' '{printf "%s\t%s\n", $1, $2}' ;;
+    esac
+}
+
+# Fila completa del índice para nombre (primera coincidencia).
+index_row() {
+    awk -F'\t' -v q="$1" '$2==q {print; exit}' "$INDEX"
+}
+
+installed_version() {
+    _m="$APPS/$1/manifest"
+    [ -f "$_m" ] || return 1
+    ( unset version
+      # shellcheck disable=SC1090
+      . "$_m"; printf '%s' "${version:-?}" )
+}
+
+# ---------- descarga e instalación ----------
+
+# fetch <repo> <url-rel> <dest>
+fetch_pkg() {
+    _repo="$1"; _rel="$2"; _dest="$3"
+    _root=$(repo_list | awk -v r="$_repo" '$1==r {print $2; exit}')
+    [ -n "$_root" ] || { warn "repo $_repo ya no configurado"; return 1; }
+    case "$_root" in
+        file://*)
+            cp -f "${_root#file://}/$_rel" "$_dest" || return 1
+            ;;
+        http://*|https://*)
+            need_cmd curl
+            if [ -f "$_dest" ]; then
+                curl -fSL --retry 3 -C - -o "$_dest" "$_root/$_rel" 2>/dev/null || \
+                curl -fSL --retry 3 -o "$_dest" "$_root/$_rel" 2>/dev/null || return 1
+            else
+                curl -fSL --retry 3 -o "$_dest" "$_root/$_rel" 2>/dev/null || return 1
+            fi
+            ;;
+        *) warn "URL de repo no soportada: $_root"; return 1 ;;
+    esac
+    return 0
+}
+
+verify_sha() {
+    need_cmd sha256sum
+    _got=$(sha256sum "$1" | awk '{print $1}')
+    [ "$_got" = "$2" ]
+}
+
+# cas_link <staging> <dest> <blobs> — particiona al store, enlaza árbol.
+# Imprime bytes nuevos añadidos al store.
+cas_link() {
+    _staging="$1"; _dest="$2"; _blobs="$3"
+    : >"$_blobs"
+    ( cd "$_staging" && find . -mindepth 1 | sort ) | while IFS= read -r _p; do
+        _src="$_staging/$_p"; _dst="$_dest/$_p"
+        if [ -L "$_src" ]; then
+            mkdir -p "$(dirname "$_dst")"
+            ln -sfn "$(readlink "$_src")" "$_dst"
+        elif [ -d "$_src" ]; then
+            mkdir -p "$_dst"
+        elif [ -f "$_src" ]; then
+            _h=$(sha256sum "$_src" | awk '{print $1}')
+            _blob="$STORE/$(printf '%s' "$_h" | cut -c1-2)/$_h"
+            if [ ! -f "$_blob" ]; then
+                mkdir -p "$(dirname "$_blob")"
+                cp -p "$_src" "$_blob" && chmod a-w "$_blob"
+                wc -c <"$_blob" | tr -d ' ' >>"$_blobs.newbytes"
+            fi
+            mkdir -p "$(dirname "$_dst")"
+            ln -f "$_blob" "$_dst"
+            printf '%s\t%s\n' "$_h" "${_p#./}" >>"$_blobs"
+            [ -x "$_src" ] && chmod +x "$_dst"
+        else
+            warn "omitido (tipo especial): $_p"
+        fi
+    done
+    _total=0
+    [ -f "$_blobs.newbytes" ] && _total=$(awk '{s+=$1} END{print s+0}' "$_blobs.newbytes")
+    rm -f "$_blobs.newbytes"
+    printf '%s' "$_total"
+}
+
+human_size() {
+    _b="${1:-0}"
+    if [ "$_b" -ge 1073741824 ] 2>/dev/null; then
+        awk -v b="$_b" 'BEGIN{printf "%.1f GiB", b/1073741824}'
+    elif [ "$_b" -ge 1048576 ] 2>/dev/null; then
+        awk -v b="$_b" 'BEGIN{printf "%.1f MiB", b/1048576}'
+    elif [ "$_b" -ge 1024 ] 2>/dev/null; then
+        awk -v b="$_b" 'BEGIN{printf "%.0f KiB", b/1024}'
+    else
+        printf '%s B' "$_b"
+    fi
+}
+
+mkshim() {
+    _self="$1"; _bin="$2"; _app="$3"
+    cat >"$ALTORE_BIN/$_bin" <<EOF
+#!/bin/sh
+# Generado por altore para '$_app'. No editar.
+exec '$_self' -r '$_app' "\$@"
+EOF
+    chmod +x "$ALTORE_BIN/$_bin"
+}
+
+mkdesktop() {
+    _app="$1"; _mainbin="$2"; _desc="$3"; _dir="$4"
+    _ddir="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+    mkdir -p "$_ddir"
+    _icon=""
+    for _e in png svg xpm; do
+        _f=$(find "$_dir" -maxdepth 2 -name "*.$_e" 2>/dev/null | head -1)
+        [ -n "$_f" ] && { _icon="Icon=$_f"; break; }
+    done
+    cat >"$_ddir/$_app-altore.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=$_app
+Comment=$_desc
+Exec=$ALTORE_BIN/$_mainbin %U
+$_icon
+Categories=Utility;
+Terminal=false
+EOF
+}
+
+# install_row <fila-índice-TSV-8cols>
+install_row() {
+    _row="$1"
+    _repo=$(printf '%s' "$_row" | awk -F'\t' '{print $1}')
+    _name=$(printf '%s' "$_row" | awk -F'\t' '{print $2}')
+    _ver=$(printf '%s' "$_row" | awk -F'\t' '{print $3}')
+    _desc=$(printf '%s' "$_row" | awk -F'\t' '{print $4}')
+    _sha=$(printf '%s' "$_row" | awk -F'\t' '{print $6}')
+    _rel=$(printf '%s' "$_row" | awk -F'\t' '{print $7}')
+    _bins=$(printf '%s' "$_row" | awk -F'\t' '{print $8}')
+    [ -n "$_name" ] && [ -n "$_sha" ] && [ -n "$_rel" ] && [ -n "$_bins" ] || \
+        { warn "fila de índice corrupta para ${_name:-?}"; return 1; }
+
+    _have=$(installed_version "$_name" 2>/dev/null || true)
+    if [ -n "$_have" ] && [ "$_have" = "$_ver" ]; then
+        note "$_name $_ver ya está instalado"
+        return 0
+    fi
+
+    case "$_rel" in
+        *.tar.zst) _ext="tar.zst" ;;
+        *.tar.xz)  _ext="tar.xz" ;;
+        *)         _ext="tar.gz" ;;
+    esac
+    _file="$CACHE/$_name-$_ver.$_ext"
+    if [ -f "$_file" ] && verify_sha "$_file" "$_sha"; then
+        note "reutilizando descarga en caché"
+    else
+        note "descargando $_name $_ver [$_repo]..."
+        fetch_pkg "$_repo" "$_rel" "$_file" || \
+            { warn "descarga fallida de $_name"; return 4; }
+        verify_sha "$_file" "$_sha" || \
+            { warn "sha256 no coincide para $_name (descarga corrupta o manipulada)"; rm -f "$_file"; return 4; }
+    fi
+
+    _t=$(mktmp)
+    mkdir -p "$_t/stage" || return 1
+    tar -xf "$_file" -C "$_t/stage" 2>/dev/null || \
+        { warn "no se pudo extraer $_name"; return 1; }
+    [ -x "$_t/stage/AppRun" ] || \
+        { warn "paquete $_name inválido: falta AppRun ejecutable"; return 1; }
+
+    [ -n "$_have" ] && { note "actualizando $_name $_have → $_ver"; rm -rf "$APPS/$_name"; }
+    mkdir -p "$APPS/$_name" || return 1
+    _new=$(cas_link "$_t/stage" "$APPS/$_name" "$APPS/$_name/blobs.tsv")
+
+    _sq=$(printf "%s" "$_desc" | sed "s/'/'\\\\''/g")
+    cat >"$APPS/$_name/manifest" <<EOF
+name='$_name'
+version='$_ver'
+repo='$_repo'
+desc='$_sq'
+size='$(wc -c <"$_file" | tr -d ' ')'
+bins='$_bins'
+EOF
+    _self=$(self_path)
+    _main=$(printf '%s' "$_bins" | cut -d, -f1)
+    [ -n "$_main" ] || _main="$_name"
+    _oldifs="$IFS"; IFS=','
+    # shellcheck disable=SC2162
+    for _b in $_bins; do
+        [ -n "$_b" ] && mkshim "$_self" "$_b" "$_name"
+    done
+    IFS="$_oldifs"
+    mkdesktop "$_name" "$_main" "$_desc" "$APPS/$_name"
+    printf 'instalado %s %s (%s nuevos en disco)\n' "$_name" "$_ver" "$(human_size "$_new")"
+    return 0
+}
+
+do_remove() {
+    _r=$(resolve_installed "$1")
+    case "$_r" in
+        NONE) printf 'atl: "%s" no está instalado.\n' "$1" >&2; return 3 ;;
+        CANCEL) note "cancelado"; return 0 ;;
+    esac
+    _name=$(printf '%s' "$_r" | cut -f1)
+    _m="$APPS/$_name/manifest"
+    _bins=""
+    if [ -f "$_m" ]; then
+        _bins=$( ( unset bins; . "$_m"; printf '%s' "${bins:-}" ) )
+    fi
+    rm -rf "$APPS/$_name"
+    _oldifs="$IFS"; IFS=','
+    for _b in $_bins; do
+        [ -n "$_b" ] && rm -f "$ALTORE_BIN/$_b"
+    done
+    IFS="$_oldifs"
+    rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/applications/$_name-altore.desktop"
+    printf 'desinstalado %s (config de usuario intacta; ejecuta `atl gc` para liberar disco)\n' "$_name"
+    return 0
+}
+
+# ---------- comandos ----------
+
+cmd_search() {
+    ensure_index
+    _t=$(mktmp)
+    match "$1" >"$_t/cand"
+    if [ ! -s "$_t/cand" ]; then
+        printf 'atl: sin resultados para "%s" (prueba `atl -u` para refrescar índices).\n' "$1" >&2
+        return 3
+    fi
+    awk -F'\t' '{printf "%s  %s  [%s]  — %s\n", $2, $3, $4, $5}' "$_t/cand"
+    return 0
+}
+
+cmd_install() {
+    ensure_index
+    _r=$(resolve_all "$1")
+    case "$_r" in
+        NONE)
+            printf 'atl: paquete "%s" no encontrado en ningún repo.\n' "$1" >&2
+            return 3 ;;
+        CANCEL) note "cancelado, no se instala nada"; return 0 ;;
+    esac
+    _name=$(printf '%s' "$_r" | cut -f1)
+    install_row "$(index_row "$_name")" || return $?
+}
+
+cmd_run() {
+    _app="$1"; shift
+    ensure_dirs
+    if [ -x "$APPS/$_app/AppRun" ]; then
+        unset LD_LIBRARY_PATH GCONV_PATH GDK_PIXBUF_MODULE_FILE 2>/dev/null || true
+        exec "$APPS/$_app/AppRun" "$@"
+    fi
+    # ¿Es un alias (binario exportado por otra app)?
+    for _m in "$APPS"/*/manifest; do
+        [ -f "$_m" ] || continue
+        _hit=$( ( unset name bins; . "$_m"
+                  case ",${bins:-}," in *",$_app,"*) printf '%s' "${name:-}";; esac ) )
+        if [ -n "$_hit" ] && [ -x "$APPS/$_hit/AppRun" ]; then
+            unset LD_LIBRARY_PATH GCONV_PATH GDK_PIXBUF_MODULE_FILE 2>/dev/null || true
+            exec "$APPS/$_hit/AppRun" "$@"
+        fi
+    done
+    # No instalado: buscar → instalar → ejecutar.
+    ensure_index
+    note "\"$_app\" no está instalado, buscando en repos..."
+    _r=$(resolve_all "$_app")
+    case "$_r" in
+        NONE)
+            printf 'atl: "%s" no está instalado ni existe en los repos.\n' "$_app" >&2
+            return 3 ;;
+        CANCEL) note "cancelado"; return 0 ;;
+    esac
+    _name=$(printf '%s' "$_r" | cut -f1)
+    install_row "$(index_row "$_name")" || return $?
+    [ -x "$APPS/$_name/AppRun" ] || { warn "instalado pero sin AppRun ejecutable"; return 1; }
+    unset LD_LIBRARY_PATH GCONV_PATH GDK_PIXBUF_MODULE_FILE 2>/dev/null || true
+    exec "$APPS/$_name/AppRun" "$@"
+}
+
+cmd_info() {
+    ensure_index
+    _r=$(resolve_all "$1")
+    case "$_r" in
+        NONE) printf 'atl: paquete "%s" no encontrado en ningún repo.\n' "$1" >&2; return 3 ;;
+        CANCEL) note "cancelado"; return 0 ;;
+    esac
+    _name=$(printf '%s' "$_r" | cut -f1)
+    _row=$(index_row "$_name")
+    _repo=$(printf '%s' "$_row" | awk -F'\t' '{print $1}')
+    _ver=$(printf '%s' "$_row" | awk -F'\t' '{print $3}')
+    _desc=$(printf '%s' "$_row" | awk -F'\t' '{print $4}')
+    _size=$(printf '%s' "$_row" | awk -F'\t' '{print $5}')
+    _sha=$(printf '%s' "$_row" | awk -F'\t' '{print $6}')
+    _bins=$(printf '%s' "$_row" | awk -F'\t' '{print $8}')
+    printf 'nombre:      %s\n' "$_name"
+    printf 'descripción: %s\n' "$_desc"
+    printf 'versión:     %s\n' "$_ver"
+    printf 'repo:        %s\n' "$_repo"
+    printf 'tamaño:      %s\n' "$(human_size "$_size")"
+    printf 'sha256:      %.16s…\n' "$_sha"
+    printf 'binarios:    %s\n' "$_bins"
+    _have=$(installed_version "$_name" 2>/dev/null || true)
+    if [ -n "$_have" ]; then
+        printf 'estado:      instalado (%s)\n' "$_have"
+    else
+        printf 'estado:      no instalado (instalable con: atl -i %s)\n' "$_name"
+    fi
+    return 0
+}
+
+cmd_list() {
+    ensure_dirs
+    _n=0; _tot=0
+    for _m in "$APPS"/*/manifest; do
+        [ -f "$_m" ] || continue
+        _info=$( ( unset name version repo; . "$_m"
+                   _d=$(du -sb "$APPS/${name:-?}" 2>/dev/null | awk '{print $1}')
+                   printf '%s\t%s\t%s\t%s\n' "${name:-?}" "${version:-?}" "${repo:-?}" "${_d:-0}") )
+        printf '%s  %s  [%s]  %s\n' \
+            "$(printf '%s' "$_info" | cut -f1)" \
+            "$(printf '%s' "$_info" | cut -f2)" \
+            "$(printf '%s' "$_info" | cut -f3)" \
+            "$(human_size "$(printf '%s' "$_info" | cut -f4)")"
+        _n=$((_n+1))
+        _tot=$((_tot+$(printf '%s' "$_info" | cut -f4)))
+    done
+    if [ "$_n" -eq 0 ]; then
+        note "nada instalado (prueba \`atl -s <texto>\`)"
+    else
+        printf 'total: %d paquetes, %s\n' "$_n" "$(human_size "$_tot")"
+    fi
+    return 0
+}
+
+cmd_listg() {
+    ensure_index
+    if [ -n "${1:-}" ]; then
+        awk -F'\t' -v r="$1" '$1==r {printf "%s  %s  — %s\n", $2, $3, $4; f=1} END{exit !f}' "$INDEX" && return 0
+        printf 'atl: repo "%s" desconocido. Repos:\n' "$1" >&2
+        repo_list | awk '{print "  "$1}' >&2
+        return 3
+    fi
+    awk -F'\t' '{print $1"\t"$2"  "$3"  — "$4}' "$INDEX" | sort -k1,1 -k2,2 | \
+        awk -F'\t' 'r!=$1 {r=$1; printf "== %s ==\n", r} {print $2}'
+    return 0
+}
+
+cmd_update() {
+    sync_all || warn "algún repo falló; sigo con lo descargado"
+    if [ -n "${1:-}" ]; then
+        _r=$(resolve_installed "$1")
+        case "$_r" in
+            NONE)
+                printf 'atl: "%s" no está instalado (¿quisiste `atl -i %s`?).\n' "$1" "$1" >&2
+                return 3 ;;
+            CANCEL) note "cancelado"; return 0 ;;
+        esac
+        _name=$(printf '%s' "$_r" | cut -f1)
+        _have=$(installed_version "$_name")
+        _row=$(index_row "$_name")
+        [ -n "$_row" ] || { warn "$_name ya no existe en los repos"; return 1; }
+        _avail=$(printf '%s' "$_row" | awk -F'\t' '{print $3}')
+        _newest=$(printf '%s\n%s' "$_have" "$_avail" | sort -V | tail -1)
+        if [ "$_newest" = "$_have" ]; then
+            note "$_name ya está al día ($_have)"
+            return 0
+        fi
+        install_row "$_row"
+        return $?
+    fi
+    _upd=0; _ok=0; _fail=0
+    for _m in "$APPS"/*/manifest; do
+        [ -f "$_m" ] || continue
+        _name=$( ( unset name; . "$_m"; printf '%s' "${name:-}") )
+        [ -n "$_name" ] || continue
+        _have=$(installed_version "$_name")
+        _row=$(index_row "$_name")
+        [ -n "$_row" ] || { warn "$_name ya no existe en los repos"; _fail=$((_fail+1)); continue; }
+        _avail=$(printf '%s' "$_row" | awk -F'\t' '{print $3}')
+        if [ "$(printf '%s\n%s' "$_have" "$_avail" | sort -V | tail -1)" = "$_have" ]; then
+            _ok=$((_ok+1))
+        else
+            if install_row "$_row"; then _upd=$((_upd+1)); else _fail=$((_fail+1)); fi
+        fi
+    done
+    printf 'actualizados %d, al día %d, fallidos %d\n' "$_upd" "$_ok" "$_fail"
+    [ "$_fail" -gt 0 ] && return 1
+    return 0
+}
+
+cmd_doctor() {
+    _bad=0
+    printf '== altore doctor ==\n'
+    printf 'sistema: %s %s\n' "$(uname -s)" "$(uname -m)"
+    if [ -d /dev/dri ]; then printf 'ok      GPU /dev/dri presente\n'
+    else printf 'aviso    sin /dev/dri (gráficos por software)\n'; fi
+    if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+        printf 'ok      sesión gráfica (%s)\n' "${WAYLAND_DISPLAY:-$DISPLAY}"
+    else
+        printf 'aviso    sin DISPLAY/WAYLAND_DISPLAY (solo CLI)\n'
+    fi
+    _free=$(df -k "$HOME" 2>/dev/null | awk 'NR==2{print $4}')
+    if [ -n "$_free" ] && [ "$_free" -gt 524288 ] 2>/dev/null; then
+        printf 'ok      espacio en HOME (%s libres)\n' "$(human_size $((_free*1024)))"
+    else
+        printf 'FALTA    poco espacio en HOME\n'; _bad=1
+    fi
+    for _c in curl tar gzip sha256sum awk ln df du find sort; do
+        if command -v "$_c" >/dev/null 2>&1; then printf 'ok      %s\n' "$_c"
+        else printf 'FALTA    %s\n' "$_c"; _bad=1; fi
+    done
+    while read -r _rn _ru; do
+        [ -n "${_rn:-}" ] || continue
+        case "$_ru" in
+            file://*) [ -d "${_ru#file://}" ] && printf 'ok      repo %s (local)\n' "$_rn" || \
+                          { printf 'aviso    repo %s: ruta ausente\n' "$_rn"; } ;;
+            http*) curl -fSIL --max-time 10 "$_ru/index.tsv" >/dev/null 2>&1 && \
+                       printf 'ok      repo %s (red)\n' "$_rn" || \
+                       printf 'aviso    repo %s: sin conexión\n' "$_rn" ;;
+        esac
+    done <<EOF
+$(repo_list)
+EOF
+    [ "$_bad" -eq 0 ]
+}
+
+cmd_gc() {
+    ensure_dirs
+    _t=$(mktmp)
+    for _b in "$APPS"/*/blobs.tsv; do
+        [ -f "$_b" ] || continue
+        cut -f1 "$_b" >>"$_t/ref"
+    done
+    sort -u "$_t/ref" 2>/dev/null >"$_t/ref.u" || : >"$_t/ref.u"
+    _before=$(du -sb "$STORE" 2>/dev/null | awk '{print $1}'); _before=${_before:-0}
+    _n=0
+    if [ -d "$STORE" ]; then
+        find "$STORE" -type f | while IFS= read -r _f; do
+            _h=$(basename "$_f")
+            grep -qx "$_h" "$_t/ref.u" 2>/dev/null || { rm -f "$_f"; printf 'x\n' >>"$_t/del"; }
+        done
+        [ -f "$_t/del" ] && _n=$(wc -l <"$_t/del" | tr -d ' ')
+        find "$STORE" -mindepth 1 -type d -empty -delete 2>/dev/null || true
+    fi
+    _after=$(du -sb "$STORE" 2>/dev/null | awk '{print $1}'); _after=${_after:-0}
+    _freed=$((_before-_after)); [ "$_freed" -lt 0 ] && _freed=0
+    printf 'borrados %s archivos, liberados %s\n' "${_n:-0}" "$(human_size "$_freed")"
+    return 0
+}
+
+cmd_help() {
+    cat <<'EOF'
+atl / altore — software glibc en PCs musl. Ligero, instantáneo, simple.
+
+Uso:
+  atl -s TEXTO        buscar paquetes en todos los repos
+  atl -i PAQUETE      instalar (con sugerencias si no es exacto)
+  atl -R PAQUETE      desinstalar (no toca tu config; luego `atl gc`)
+  atl -r PAQUETE [ARGS...]   ejecutar (o simplemente: atl PAQUETE ...)
+  atl -I PAQUETE      ficha del paquete (versión, repo, tamaño, estado)
+  atl -l              listar instalados
+  atl -lg [REPO]      listar disponibles (todos o de un repo)
+  atl -u [PAQUETE]    actualizar todo (o solo uno)
+  atl -h              esta ayuda
+  atl -v              versión de altore
+  atl doctor          diagnosticar el PC (GPU, espacio, red, herramientas)
+  atl gc              borrar archivos huérfanos del store
+
+Alias de palabra: search install remove run info information list listg
+update help version doctor gc.  Opciones largas: --search --install
+--remove --run --info --list --listg --update --help --version.
+
+Toda elección numerada acepta 1..N o n (ninguno).
+Solo -i y -u tocan la red. Env: ALTORE_HOME ALTORE_BIN ALTORE_REPOS.
+Ejemplos:
+  atl -s brave
+  atl -i brave-bin
+  atl brave
+  atl -u
+EOF
+    return 0
+}
+
+# ---------- dispatch ----------
+
+main() {
+    if [ $# -lt 1 ]; then cmd_help; exit 0; fi
+    _opt="$1"; shift
+    case "$_opt" in
+        -s|--search|search)
+            [ $# -ge 1 ] || usage_err "falta texto de búsqueda"; cmd_search "$1" ;;
+        -i|--install|install)
+            [ $# -ge 1 ] || usage_err "falta paquete"; cmd_install "$1" ;;
+        -R|--remove|remove)
+            [ $# -ge 1 ] || usage_err "falta paquete"; do_remove "$1" ;;
+        -r|--run|run)
+            [ $# -ge 1 ] || usage_err "falta paquete"; cmd_run "$@" ;;
+        -I|--info|--information|info|information)
+            [ $# -ge 1 ] || usage_err "falta paquete"; cmd_info "$1" ;;
+        -l|--list|list)
+            cmd_list ;;
+        -lg|--listg|listg)
+            cmd_listg "${1:-}" ;;
+        -u|--update|update)
+            cmd_update "${1:-}" ;;
+        -h|--help|help)
+            cmd_help ;;
+        -v|--version|version)
+            printf 'altore %s (%s)\n' "$ALTORE_VERSION" "$(uname -m)" ;;
+        doctor)
+            cmd_doctor ;;
+        gc)
+            cmd_gc ;;
+        -*)
+            usage_err "opción desconocida: $_opt" ;;
+        *)
+            cmd_run "$_opt" "$@" ;;
+    esac
+}
+
+main "$@"

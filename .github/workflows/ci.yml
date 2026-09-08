@@ -1,0 +1,63 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instala shellcheck
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+      - name: shellcheck
+        run: shellcheck -S warning src/altore tests/*.sh packaging/*.sh
+      - name: Sintaxis sh/dash/bash
+        run: |
+          sh -n src/altore
+          bash -n src/altore
+      - name: Sin bashismos conocidos
+        # ${v:-x} ${v#x} etc. son POSIX; esto caza ${@:n} y ${v:n[:m]}.
+        # (shellcheck, con shebang #!/bin/sh, caza el resto: [[, //, etc.)
+        run: |
+          ! grep -nE '\$\{@|\$\{[^}:]+:[0-9 ]' src/altore || \
+            (echo "posible bashismo en src/altore" >&2; exit 1)
+      - name: Template void-packages mínimo
+        run: |
+          t=packaging/void-packages/srcpkgs/altore/template
+          sh -n "$t"
+          for f in pkgname version revision short_desc maintainer license homepage; do
+            grep -q "^$f=" "$t" || { echo "falta $f en template" >&2; exit 1; }
+          done
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fixtures + suite funcional
+        run: |
+          sh tests/mkdemo.sh
+          sh tests/run-tests.sh
+
+  package:
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Construye .xbps
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq curl xz-utils
+          sh packaging/xbps-create.sh --outdir dist/
+      - name: Verifica contenido del .xbps
+        run: |
+          f=$(ls dist/*.xbps)
+          tar -tf "$f" | grep -qx './usr/bin/altore'
+          tar -tf "$f" | grep -qx './usr/bin/atl'
+          tar -tf "$f" | grep -qx './props.plist'
+          echo "contenido OK: $f"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: altore-xbps
+          path: dist/*.xbps
