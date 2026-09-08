@@ -8,12 +8,11 @@
 #      atl PALABRA ... | atl PKG [ARGS...]
 # Códigos: 0 ok · 1 error operativo · 2 uso incorrecto · 3 sin resultados ·
 #          4 red/descarga/verificación.
-
-set -u
-
 # shellcheck disable=SC1090
 # (los `manifest` que se importan con `.` los genera el propio altore al
 # instalar; mismo dominio de confianza, no hay source externo).
+
+set -u
 
 ALTORE_VERSION="0.1.0"
 
