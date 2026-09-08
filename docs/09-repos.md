@@ -76,7 +76,33 @@ no exige estructura interna concreta: enlaza **todo** el árbol tal cual.
 5. Añadir fila a `index.tsv` con sha256 real. Firmar el commit que lo añade
    (trazabilidad; firma de artefactos v2).
 
-## 6. Caché e índice unificado en cliente
+Todo automatizado en `tools/anylinux2repo.sh`.
+
+## 6. Injerto de glibc (AppImages clásicos)
+
+Un AppImage clásico (linuxdeploy) no trae loader ni glibc: enlaza contra la
+glibc del host y en musl muere (`symbol not found`, `No such file...`). Con
+`--graft-from <app-base>` el conversor le injerta lo que le falte (loader,
+libc, libm, libgcc_s…; cierre transitivo de NEEDED vía `readelf`) copiado
+**byte-idéntico** desde otro paquete con closure completo:
+
+```bash
+sh tools/anylinux2repo.sh ./nvim.AppImage ./repo neovim 0.12.5 "Editor" \
+  nvim --graft-from ~/.local/share/altore/apps/yt-dlp
+```
+
+- El `AppRun` original se guarda en `AppRun.orig` y se sustituye por un stub
+  que invoca el loader injertado con `--library-path` (sin patchelf).
+- Al instalar, el CAS deduplica los ficheros injertados: verificado,
+  injertar la glibc completa costó **40 B nuevos** en disco.
+- `altore.env` (opcional, `VAR=valor`, admite `$here`): overrides de entorno
+  del paquete. Lo genera el injerto p. ej. para neovim (`VIMRUNTIME`, que
+  localiza su runtime por `/proc/self/exe`).
+- Límites honestos: si el binario trae RPATH absolutos de host o rutas FHS
+  hardcodeadas, el injerto avisa y puede no bastar (ahí sí, patchelf manual).
+  Verificado de punta a punta con Neovim 0.12.5 en Void-musl.
+
+## 7. Caché e índice unificado en cliente
 
 ```
 $ALTORE_HOME/

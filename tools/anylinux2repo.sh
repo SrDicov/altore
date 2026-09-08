@@ -1,18 +1,32 @@
 #!/bin/sh
 # anylinux2repo.sh — convierte un AppImage sharun/AnyLinux en paquete altore.
 # Uso:
-#   sh tools/anylinux2repo.sh <AppImage> <dir-repo> <nombre> <versión> "<descripción>" [bins]
+#   sh tools/anylinux2repo.sh <AppImage> <dir-repo> <nombre> <versión> "<descripción>" [bins] [--graft-from <base>]
 # Ejemplo:
 #   sh tools/anylinux2repo.sh ./yt-dlp.AppImage /srv/altore-repo yt-dlp 2026.08.19 \
 #     "Descargador de videos de cientos de sitios"
+#   sh tools/anylinux2repo.sh ./nvim.AppImage /srv/altore-repo neovim 0.12.5 \
+#     "Editor modal" nvim --graft-from ~/.local/share/altore/apps/yt-dlp
 #
-# Hace: extrae (--appimage-extract, sin FUSE) → normaliza (.desktop sin
+# --graft-from injerta la glibc que le falte a un AppImage clásico (ver
+# tools/graft-libs.sh): las libs copiadas byte-idénticas las deduplica el
+# CAS al instalar (~0 disco extra).
+#
+# Hace: extrae (--appimage-extract, sin FUSE) → [injerto] → normaliza
 # Hidden, AppRun ejecutable, Exec relativo) → empaqueta pool/ →
 # añade/sustituye la fila en index.tsv. Ver docs/09-repos.md §5.
 set -u
 
 [ $# -ge 5 ] || { echo "uso: $0 <AppImage> <dir-repo> <nombre> <versión> \"<desc>\" [bins]" >&2; exit 2; }
-IMG="$1"; REPO="$2"; NAME="$3"; VER="$4"; DESC="$5"; BINS="${6:-$3}"
+IMG="$1"; REPO="$2"; NAME="$3"; VER="$4"; DESC="$5"
+BINS="$3"; GRAFT_BASE=""
+if [ "${6:-}" = "--graft-from" ]; then
+    GRAFT_BASE="${7:-}"
+elif [ "${7:-}" = "--graft-from" ]; then
+    BINS="${6:-$3}"; GRAFT_BASE="${8:-}"
+else
+    BINS="${6:-$3}"
+fi
 
 [ -f "$IMG" ] || { echo "no existe $IMG" >&2; exit 1; }
 case "$NAME" in *[!a-z0-9+._-]*|"" ) echo "nombre inválido: $NAME" >&2; exit 2;; esac
@@ -28,6 +42,11 @@ chmod +x "$IMG"
 # Ojo: uruntime extrae como symlink squashfs-root -> ./AppDir; find(1) no
 # desciende en symlinks, así que se resuelve la ruta física primero.
 APP=$(cd "$T/squashfs-root" && pwd -P) || exit 1
+
+if [ -n "$GRAFT_BASE" ]; then
+    HERE_GRAFT=$(dirname "$0")
+    sh "$HERE_GRAFT/graft-libs.sh" "$APP" --from "$GRAFT_BASE" || exit 1
+fi
 [ -x "$APP/AppRun" ] || { echo "sin AppRun ejecutable: ¿es sharun?" >&2; exit 1; }
 
 DESK=$(ls "$APP/$NAME.desktop" 2>/dev/null || ls "$APP"/*.desktop 2>/dev/null | head -1)
@@ -35,7 +54,11 @@ DESK=$(ls "$APP/$NAME.desktop" 2>/dev/null || ls "$APP"/*.desktop 2>/dev/null | 
 sed -i '/^Hidden=true$/d' "$DESK"
 _EXEC=$(grep -m1 '^Exec=' "$DESK" | cut -d= -f2 | awk '{print $1}')
 case "$_EXEC" in /*) echo "aviso: Exec absoluto ($_EXEC), puede fallar fuera del AppImage" >&2;; esac
-ls "$APP"/*.png "$APP"/*.svg >/dev/null 2>&1 || \
+_icon_found=0
+for _e in png svg; do
+    ls "$APP"/*."$_e" >/dev/null 2>&1 && _icon_found=1
+done
+[ "$_icon_found" -eq 1 ] || \
     echo "aviso: sin icono png/svg (el .desktop quedará sin Icon)" >&2
 
 mkdir -p "$REPO/pool"
