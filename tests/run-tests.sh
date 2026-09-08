@@ -27,7 +27,7 @@ contains() { # contains <desc> <aguja> <pajar>
 A() { sh "$ALT" "$@"; }  # invoca altore con dash (igual que /bin/sh)
 
 # 1. sync + search
-out=$(A -u 2>&1); contains "sync inicial" "4 paquetes conocidos" "$out"
+out=$(A -u 2>&1); contains "sync inicial" "5 paquetes conocidos" "$out"
 out=$(A -s brave 2>&1); rc=$?
 is_eq "search brave rc" "0" "$rc"
 contains "search brave halla brave-bin" "brave-bin" "$out"
@@ -83,14 +83,31 @@ A -lg norepo >/dev/null 2>&1; is_eq "listg repo malo rc=3" "3" "$?"
 out=$(A -v 2>&1); contains "version" "altore 0.1.0" "$out"
 A -h >/dev/null 2>&1; is_eq "help rc" "0" "$?"
 A --bogus >/dev/null 2>&1; is_eq "flag desconocido rc=2" "2" "$?"
+A --doctor >/dev/null 2>&1; is_eq "long --doctor rc" "0" "$?"
+A --gc >/dev/null 2>&1; is_eq "long --gc rc" "0" "$?"
 out=$(printf 'n\n' | A -I brave 2>&1); contains "info ambiguo cancelable" "Se encontraron" "$out"
 out=$(ALTORE_NONINTERACTIVE=1 sh "$ALT" -i brave 2>&1); contains "noninteractive cancela" "cancelado" "$out"
 out=$(A doctor 2>&1); is_eq "doctor rc" "0" "$?"
+
+# 6b. purga de repos desconfigurados (sin red)
+printf 'fantasma\tx\t1.0\tdesc\t1\tabc\tpool/x\tbinx\n' >>"$ALTORE_HOME/index.tsv"
+A -s freetube >/dev/null 2>&1
+grep -q '^fantasma' "$ALTORE_HOME/index.tsv" && bad "purga repo desconfigurado" || ok "purga repo desconfigurado"
+
+# 6c. aviso de índices viejos (sin red; no reescribe nada)
+touch -d '10 days ago' "$ALTORE_HOME/.last-sync"
+out=$(A -s freetube 2>&1 >/dev/null); contains "aviso índice viejo" ">7 días" "$out"
+touch "$ALTORE_HOME/.last-sync"
 
 # 7. run instala-y-ejecuta si falta (vía picker)
 [ -e "$ALTORE_HOME/apps/obs-studio" ] && rm -rf "$ALTORE_HOME/apps/obs-studio"
 out=$(printf '1\n' | A obs-studio under test 2>&1 | tail -1)
 is_eq "run instala y ejecuta" "HELLO obs-studio 2.0 args:under test" "$out"
+
+# 8. saneado de entorno en run + alias de binario
+A -i envprobe >/dev/null 2>&1
+out=$(LD_LIBRARY_PATH=/tmp/fake GCONV_PATH=/tmp/fake GDK_PIXBUF_MODULE_FILE=/tmp/fake A -r envprobe 2>&1)
+is_eq "run sanea entorno heredado" "ENV LD=[] GCONV=[] PIXBUF=[]" "$out"
 
 rm -rf "$T"
 printf '\n=== %d ok, %d fallos ===\n' "$PASS" "$FAIL"
