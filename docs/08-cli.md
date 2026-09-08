@@ -38,10 +38,12 @@ Sin resultados → código 3 + sugerencia de `update` (índices viejos).
    lista numerada + `Elige número (n=ninguno):`; `n` = aborta (código 0,
    "cancelado", sin error).
 3. Descarga a `cache/` (reanuda si existe parcial: `curl -C -`), verifica
-   sha256 (fallo = borra caché parcial, código 4), extrae, particiona por hash
-   al store (reutiliza existentes), enlaza `apps/<nombre>/` con hardlinks,
-   escribe `manifest`, crea shim en `~/.local/bin` + `.desktop`, imprime
-   `instalado <nombre> <versión> (<tamaño nuevo en disco>)`.
+   sha256 (filas de catálogo remoto sin sha: verifica por tamaño y lo dice),
+   extrae, particiona por hash al store (reutiliza existentes), enlaza
+   `apps/<nombre>/` con hardlinks, escribe `manifest`, crea shim en
+   `~/.local/bin` + `.desktop`, imprime
+   `instalado <nombre> <versión> (<tamaño nuevo en disco>)`. Los bins no
+   declarados (catálogo remoto) se descubren del `.desktop` al instalar.
 4. Si ya instalado en igual versión → "ya instalado", código 0. Si hay
    versión mayor → propone actualizar (mismo prompt; `n` cancela).
 

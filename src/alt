@@ -270,9 +270,27 @@ installed_version() {
 
 # ---------- descarga e instalación ----------
 
-# fetch <repo> <url-rel> <dest>
+# fetch <repo> <url-rel-o-absoluta> <dest>
+# Si la URL es absoluta (http://, https://, file://) se usa tal cual
+# (filas de catálogo remoto); si no, relativa a la raíz del repo.
 fetch_pkg() {
     _repo="$1"; _rel="$2"; _dest="$3"
+    case "$_rel" in
+        http://*|https://*)
+            need_cmd curl
+            if [ -f "$_dest" ]; then
+                curl -fSL --retry 3 -C - -o "$_dest" "$_rel" 2>/dev/null || \
+                curl -fSL --retry 3 -o "$_dest" "$_rel" 2>/dev/null || return 1
+            else
+                curl -fSL --retry 3 -o "$_dest" "$_rel" 2>/dev/null || return 1
+            fi
+            return 0
+            ;;
+        file://*)
+            cp -f "${_rel#file://}" "$_dest" || return 1
+            return 0
+            ;;
+    esac
     _root=$(repo_list | awk -v r="$_repo" '$1==r {print $2; exit}')
     [ -n "$_root" ] || { warn "repo $_repo ya no configurado"; return 1; }
     case "$_root" in
@@ -360,21 +378,37 @@ mkdesktop() {
     _app="$1"; _mainbin="$2"; _desc="$3"; _dir="$4"
     _ddir="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
     mkdir -p "$_ddir"
+    # .desktop fuente (para preservar campos): <app>.desktop o el primero.
+    _srcdesk=""
+    [ -f "$_dir/$_app.desktop" ] && _srcdesk="$_dir/$_app.desktop"
+    [ -z "$_srcdesk" ] && _srcdesk=$(find "$_dir" -maxdepth 2 -name '*.desktop' 2>/dev/null | head -1)
+    _term="false"; _cats="Utility;"; _mime=""; _startup=""; _try=""
+    if [ -n "$_srcdesk" ]; then
+        _v=$(grep -m1 '^Terminal=' "$_srcdesk" 2>/dev/null | cut -d= -f2 | tr -d ' ')
+        case "$_v" in true|True|TRUE) _term="true";; esac
+        _v=$(grep -m1 '^Categories=' "$_srcdesk" 2>/dev/null | cut -d= -f2-)
+        [ -n "$_v" ] && _cats="$_v"
+        _v=$(grep -m1 '^MimeType=' "$_srcdesk" 2>/dev/null | cut -d= -f2-)
+        [ -n "$_v" ] && _mime="MimeType=$_v"
+        _v=$(grep -m1 '^StartupNotify=' "$_srcdesk" 2>/dev/null | cut -d= -f2 | tr -d ' ')
+        case "$_v" in true|false|True|False) _startup="StartupNotify=$_v";; esac
+        _v=$(grep -m1 '^TryExec=' "$_srcdesk" 2>/dev/null | cut -d= -f2 | awk '{print $1}')
+        [ -n "$_v" ] && _try="TryExec=$_v"
+    fi
     _icon=""
     for _e in png svg xpm; do
         _f=$(find "$_dir" -maxdepth 2 -name "*.$_e" 2>/dev/null | head -1)
         [ -n "$_f" ] && { _icon="Icon=$_f"; break; }
     done
-    cat >"$_ddir/$_app-altore.desktop" <<EOF
-[Desktop Entry]
-Type=Application
-Name=$_app
-Comment=$_desc
-Exec=$ALTORE_BIN/$_mainbin %U
-$_icon
-Categories=Utility;
-Terminal=false
-EOF
+    {
+        printf '[Desktop Entry]\nType=Application\nName=%s\nComment=%s\n' "$_app" "$_desc"
+        printf 'Exec=%s/%s %%U\n' "$ALTORE_BIN" "$_mainbin"
+        [ -n "$_icon" ] && printf '%s\n' "$_icon"
+        [ -n "$_try" ] && printf '%s\n' "$_try"
+        printf 'Categories=%s\nTerminal=%s\n' "$_cats" "$_term"
+        [ -n "$_mime" ] && printf '%s\n' "$_mime"
+        [ -n "$_startup" ] && printf '%s\n' "$_startup"
+    } >"$_ddir/$_app-altore.desktop"
 }
 
 # install_row <fila-índice-TSV-8cols>
@@ -387,7 +421,8 @@ install_row() {
     _sha=$(printf '%s' "$_row" | awk -F'\t' '{print $6}')
     _rel=$(printf '%s' "$_row" | awk -F'\t' '{print $7}')
     _bins=$(printf '%s' "$_row" | awk -F'\t' '{print $8}')
-    [ -n "$_name" ] && [ -n "$_sha" ] && [ -n "$_rel" ] && [ -n "$_bins" ] || \
+    _size=$(printf '%s' "$_row" | awk -F'\t' '{print $5}')
+    [ -n "$_name" ] && [ -n "$_rel" ] || \
         { warn "fila de índice corrupta para ${_name:-?}"; return 1; }
 
     _have=$(installed_version "$_name" 2>/dev/null || true)
@@ -399,29 +434,71 @@ install_row() {
     case "$_rel" in
         *.tar.zst) _ext="tar.zst" ;;
         *.tar.xz)  _ext="tar.xz" ;;
+        *.AppImage|*.appimage) _ext="AppImage" ;;
         *)         _ext="tar.gz" ;;
     esac
     _file="$CACHE/$_name-$_ver.$_ext"
-    if [ -f "$_file" ] && verify_sha "$_file" "$_sha"; then
+    _cached_ok=0
+    if [ -f "$_file" ]; then
+        if [ -n "$_sha" ]; then
+            verify_sha "$_file" "$_sha" && _cached_ok=1
+        elif [ -n "$_size" ] && [ "$(wc -c <"$_file" | tr -d ' ')" = "$_size" ]; then
+            _cached_ok=1
+        fi
+    fi
+    if [ "$_cached_ok" -eq 1 ]; then
         note "reutilizando descarga en caché"
     else
         note "descargando $_name $_ver [$_repo]..."
         fetch_pkg "$_repo" "$_rel" "$_file" || \
             { warn "descarga fallida de $_name"; return 4; }
-        verify_sha "$_file" "$_sha" || \
-            { warn "sha256 no coincide para $_name (descarga corrupta o manipulada)"; rm -f "$_file"; return 4; }
+        if [ -n "$_sha" ]; then
+            verify_sha "$_file" "$_sha" || \
+                { warn "sha256 no coincide para $_name (descarga corrupta o manipulada)"; rm -f "$_file"; return 4; }
+        else
+            # Fila de catálogo remoto sin sha: se verifica por tamaño.
+            _got=$(wc -c <"$_file" | tr -d ' ')
+            if [ -n "$_size" ] && [ "$_got" != "$_size" ]; then
+                warn "tamaño no coincide para $_name (esperado $_size, obtenido $_got)"
+                rm -f "$_file"; return 4
+            fi
+            note "sin sha256 (catálogo remoto): verificado por tamaño"
+        fi
     fi
 
     _t=$(mktmp)
     mkdir -p "$_t/stage" || return 1
-    tar -xf "$_file" -C "$_t/stage" 2>/dev/null || \
-        { warn "no se pudo extraer $_name"; return 1; }
+    if [ "$_ext" = "AppImage" ]; then
+        # Fila de catálogo remoto: el artefacto ES el AppImage; se extrae
+        # aquí mismo (equivale a tools/anylinux2repo.sh sin normalizar).
+        chmod +x "$_file"
+        ( cd "$_t" && "$_file" --appimage-extract >/dev/null 2>&1 ) || \
+            { warn "no se pudo extraer $_name (AppImage dañado o runtime incompatible)"; return 1; }
+        _appdir=$(cd "$_t/squashfs-root" 2>/dev/null && pwd -P) || \
+            { warn "extracción sin AppDir para $_name"; return 1; }
+        _t_stage="$_t/stage"
+        # Copia el contenido (resolviendo el posible symlink de uruntime).
+        ( cd "$_appdir" && tar -cf - . ) 2>/dev/null | ( cd "$_t_stage" && tar -xf - ) 2>/dev/null || \
+            { warn "no se pudo leer el AppDir de $_name"; return 1; }
+    else
+        tar -xf "$_file" -C "$_t/stage" 2>/dev/null || \
+            { warn "no se pudo extraer $_name"; return 1; }
+    fi
     [ -x "$_t/stage/AppRun" ] || \
         { warn "paquete $_name inválido: falta AppRun ejecutable"; return 1; }
 
     [ -n "$_have" ] && { note "actualizando $_name $_have → $_ver"; rm -rf "${APPS:?}/${_name:?}"; }
     mkdir -p "$APPS/$_name" || return 1
     _new=$(cas_link "$_t/stage" "$APPS/$_name" "$APPS/$_name/blobs.tsv")
+
+    # Bins no declarados (catálogo remoto): se descubren del .desktop.
+    if [ -z "$_bins" ]; then
+        _ddesk=$(find "$_t/stage" -maxdepth 2 -name '*.desktop' 2>/dev/null | head -1)
+        [ -n "$_ddesk" ] || { warn "paquete $_name inválido: sin .desktop ni bins declarados"; rm -rf "${APPS:?}/${_name:?}"; return 1; }
+        _bins=$(grep -m1 '^Exec=' "$_ddesk" | cut -d= -f2 | awk '{print $1}')
+        [ -n "$_bins" ] || { warn "paquete $_name inválido: .desktop sin Exec"; rm -rf "${APPS:?}/${_name:?}"; return 1; }
+        note "binarios descubiertos: $_bins"
+    fi
 
     _sq=$(printf "%s" "$_desc" | sed "s/'/'\\\\''/g")
     cat >"$APPS/$_name/manifest" <<EOF
@@ -435,6 +512,14 @@ EOF
     _self=$(self_path)
     _main=$(printf '%s' "$_bins" | cut -d, -f1)
     [ -n "$_main" ] || _main="$_name"
+    if [ -z "$(find "$_t/stage" -name 'ld-linux-*.so*' 2>/dev/null | head -1)" ]; then
+        if [ "$(head -c2 "$_t/stage/AppRun" 2>/dev/null)" = "#!" ]; then
+            warn "$_name parece un AppImage clásico sin glibc propia: puede no correr en musl"
+            note "si falla al ejecutar, conviértelo con injerto (tools/anylinux2repo.sh --graft-from …)"
+        else
+            warn "$_name no trae loader (ld-linux): puede no ejecutarse"
+        fi
+    fi
     _oldifs="$IFS"; IFS=','
     # shellcheck disable=SC2162
     for _b in $_bins; do
@@ -550,8 +635,12 @@ cmd_info() {
     printf 'versión:     %s\n' "$_ver"
     printf 'repo:        %s\n' "$_repo"
     printf 'tamaño:      %s\n' "$(human_size "$_size")"
-    printf 'sha256:      %.16s…\n' "$_sha"
-    printf 'binarios:    %s\n' "$_bins"
+    if [ -n "$_sha" ]; then
+        printf 'sha256:      %.16s…\n' "$_sha"
+    else
+        printf 'sha256:      (catálogo remoto: verificado por tamaño)\n'
+    fi
+    [ -n "$_bins" ] && printf 'binarios:    %s\n' "$_bins"
     _have=$(installed_version "$_name" 2>/dev/null || true)
     if [ -n "$_have" ]; then
         printf 'estado:      instalado (%s)\n' "$_have"

@@ -14,6 +14,7 @@ export ALTORE_HOME="$T/home" ALTORE_BIN="$T/bin"
 export XDG_DATA_HOME="$T/xdg" HOME="$T/fakehome"
 mkdir -p "$ALTORE_HOME" "$ALTORE_BIN" "$XDG_DATA_HOME" "$HOME"
 printf 'demo  file://%s/tests/fixture/repo\n' "$ROOT" >"$ALTORE_HOME/repos.conf"
+printf 'remote  file://%s/tests/fixture/remote\n' "$ROOT" >>"$ALTORE_HOME/repos.conf"
 
 ok()   { PASS=$((PASS+1)); printf 'ok   %s\n' "$1"; }
 bad()  { FAIL=$((FAIL+1)); printf 'FAIL %s\n%s\n' "$1" "${2:-}"; }
@@ -27,7 +28,7 @@ contains() { # contains <desc> <aguja> <pajar>
 A() { sh "$ALT" "$@"; }  # invoca altore con dash (igual que /bin/sh)
 
 # 1. sync + search
-out=$(A -u 2>&1); contains "sync inicial" "5 paquetes conocidos" "$out"
+out=$(A -u 2>&1); contains "sync inicial" "7 paquetes conocidos" "$out"
 out=$(A -s brave 2>&1); rc=$?
 is_eq "search brave rc" "0" "$rc"
 contains "search brave halla brave-bin" "brave-bin" "$out"
@@ -104,10 +105,29 @@ touch "$ALTORE_HOME/.last-sync"
 out=$(printf '1\n' | A obs-studio under test 2>&1 | tail -1)
 is_eq "run instala y ejecuta" "HELLO obs-studio 2.0 args:under test" "$out"
 
-# 8. saneado de entorno en run + alias de binario
+# 8. fila remota: URL absoluta + sin sha (tamaño) + bins descubiertos
+out=$(A -i remoteprobe 2>&1); is_eq "install remoto rc" "0" "$?"
+contains "install remoto verifica tamaño" "verificado por tamaño" "$out"
+contains "install remoto descubre bins" "descubiertos: remoteprobe" "$out"
+[ -x "$ALTORE_BIN/remoteprobe" ] && ok "shim remoto descubierto" || bad "shim remoto descubierto"
+out=$(A remoteprobe hola 2>&1); is_eq "run remoto" "HELLO remoteprobe 0.9 args:hola" "$out"
+out=$(A -I remoteprobe 2>&1); contains "info remoto sin sha" "catálogo remoto" "$out"
+A -R remoteprobe >/dev/null 2>&1; is_eq "remove remoto rc" "0" "$?"
+
+# 8c. instalación directa desde .AppImage (rama del catálogo real)
+out=$(A -i directapp 2>&1); is_eq "install AppImage rc" "0" "$?"
+out=$(A directapp hola 2>&1); is_eq "run AppImage" "HELLO directapp 1.0 args:hola" "$out"
+A -R directapp >/dev/null 2>&1; is_eq "remove AppImage rc" "0" "$?"
 A -i envprobe >/dev/null 2>&1
 out=$(LD_LIBRARY_PATH=/tmp/fake GCONV_PATH=/tmp/fake GDK_PIXBUF_MODULE_FILE=/tmp/fake A -r envprobe 2>&1)
 is_eq "run sanea entorno heredado" "ENV LD=[] GCONV=[] PIXBUF=[]" "$out"
+
+# 9. .desktop preserva Terminal/Categories del original
+A -i brave-nightly >/dev/null 2>&1
+grep -q '^Terminal=true$' "$XDG_DATA_HOME/applications/brave-nightly-altore.desktop" \
+    && ok "desktop preserva Terminal=true" || bad "desktop preserva Terminal=true"
+grep -q '^Terminal=false$' "$XDG_DATA_HOME/applications/brave-bin-altore.desktop" \
+    && ok "desktop Terminal=false por defecto" || bad "desktop Terminal=false por defecto"
 
 rm -rf "$T"
 printf '\n=== %d ok, %d fallos ===\n' "$PASS" "$FAIL"

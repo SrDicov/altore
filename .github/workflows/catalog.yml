@@ -1,0 +1,27 @@
+name: catalog
+
+on:
+  schedule:
+    - cron: "0 5 * * 5"
+  workflow_dispatch:
+
+jobs:
+  regen:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Regenera catálogo AnyLinux
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq jq
+          sh tools/mkanylinux-catalog.sh catalog/anylinux
+      - name: Commit si cambió
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git diff --quiet -- catalog/anylinux/index.tsv && echo "sin cambios" || \
+            (git add catalog/anylinux/index.tsv && \
+             git commit -m "catálogo anylinux actualizado" && git push)

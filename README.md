@@ -20,8 +20,9 @@ alt -i PAQUETE      instalar (lista numerada si hay dudas, n=cancela)
 alt -R PAQUETE      desinstalar (tu config intacta)
 alt -r PAQUETE [ARGS...] / alt PAQUETE ...   ejecutar (si falta, lo busca e instala)
 alt -I PAQUETE      ficha del paquete (versión, repo, tamaño, estado)
-alt -l              listar instalados
-alt -lg [REPO]      listar disponibles (todos o de un repo)
+  alt -l              listar instalados
+  alt -lg [REPO]      listar disponibles: el repo `anylinux` trae TODO el
+                      catálogo AnyLinux (~465 apps, URLs directas a GitHub)
 alt -u [PAQUETE]    actualizar todo (o solo uno)
 alt -h / alt -v     ayuda / versión
 alt doctor / alt gc diagnosticar el PC / limpiar disco huérfano

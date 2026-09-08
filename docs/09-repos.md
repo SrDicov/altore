@@ -27,20 +27,25 @@ demo    file:///home/dicov/Altore/tests/fixture/repo
 propio  https://repo.ejemplo.com/altore
 ```
 
-## 3. `index.tsv` — columnas (TODAS obligatorias, en este orden)
+## 3. `index.tsv` — columnas (en este orden)
 
 ```
-nombre  versión  descripción-corta  tamaño-bytes  sha256  url-relativa  binarios
+nombre  versión  descripción-corta  tamaño-bytes  sha256  url  binarios
 ```
 
 - `nombre`: `[a-z0-9][a-z0-9+._-]*` (minúsculas, sin espacios).
 - `versión`:comparable con `sort -V` (ej `1.40.4`, `2.1.r3`).
 - `descripción-corta`: 1 línea, sin tabuladores, ≤120 car., español.
-- `tamaño-bytes`: entero del tarball (informativo).
+- `tamaño-bytes`: entero del tarball (informativo; con sha vacío es la
+  verificación).
 - `sha256`: hex del tarball. Verificación **obligatoria** antes de extraer.
-- `url-relativa`: `pool/...` relativo a la raíz del repo.
+  Vacío solo en filas de **catálogo remoto** (§4): se verifica por tamaño y
+  `alt -I` lo dice explícitamente.
+- `url`: `pool/...` relativo a la raíz del repo, o **absoluta**
+  (`https://…`, `file://…`) en filas de catálogo remoto (se descarga tal cual).
 - `binarios`: coma-separado, sin espacios (`brave,brave-browser`); el primero
-  es el principal (shim + `.desktop` lo usan).
+  es el principal (shim + `.desktop` lo usan). Vacío solo en catálogo remoto:
+  se descubren al instalar desde el `Exec` del `.desktop`.
 
 Ejemplo:
 
@@ -48,7 +53,20 @@ Ejemplo:
 brave-bin	1.40.4	Navegador Brave, binario oficial con su glibc	48211320	9f2c…a41	pool/brave-bin-1.40.4.tar.zst	brave,brave-browser
 ```
 
-## 4. Contenido del tarball (AppDir mínimo válido)
+## 4. Catálogo remoto (todo AnyLinux sin hospedar nada)
+
+Un repo puede ser **solo-índice**: filas con URL absoluta al AppImage
+original, sin sha y sin bins. `alt -i` descarga de ahí, verifica por tamaño
+y descubre los binarios del `.desktop` al instalar. Así `catalog/anylinux`
+cubre cientos de apps sin hospedar ni un byte (generado con
+`tools/mkanylinux-catalog.sh` desde la API de GitHub; refresco semanal por CI).
+
+Compromiso honesto: sin sha256 no hay verificación criptográfica, solo
+tamaño sobre HTTPS + origen (releases oficiales de pkgforge). `alt -I` lo
+indica. En cuanto una app se usa en serio, lo correcto es convertirla a
+paquete propio (§6) con su sha.
+
+## 5. Contenido del tarball (AppDir mínimo válido)
 
 ```
 <AppDir>/
@@ -62,7 +80,7 @@ brave-bin	1.40.4	Navegador Brave, binario oficial con su glibc	48211320	9f2c…a
 entorno + fix `/proc/self/exe` (ver `docs/04-como-funciona.md`). El instalador
 no exige estructura interna concreta: enlaza **todo** el árbol tal cual.
 
-## 5. Conversión AnyLinux → repo Altore (procedimiento, no magia)
+## 6. Conversión AnyLinux → repo Altore (procedimiento, no magia)
 
 1. Tomar el AppImage sharun de pkgforge + su digest publicado.
 2. Verificar digest. Extraer AppDir (`--appimage-extract`).
@@ -78,7 +96,7 @@ no exige estructura interna concreta: enlaza **todo** el árbol tal cual.
 
 Todo automatizado en `tools/anylinux2repo.sh`.
 
-## 6. Injerto de glibc (AppImages clásicos)
+## 7. Injerto de glibc (AppImages clásicos)
 
 Un AppImage clásico (linuxdeploy) no trae loader ni glibc: enlaza contra la
 glibc del host y en musl muere (`symbol not found`, `No such file...`). Con
@@ -102,7 +120,7 @@ sh tools/anylinux2repo.sh ./nvim.AppImage ./repo neovim 0.12.5 "Editor" \
   hardcodeadas, el injerto avisa y puede no bastar (ahí sí, patchelf manual).
   Verificado de punta a punta con Neovim 0.12.5 en Void-musl.
 
-## 7. Caché e índice unificado en cliente
+## 8. Caché e índice unificado en cliente
 
 ```
 $ALTORE_HOME/

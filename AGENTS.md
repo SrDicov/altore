@@ -52,6 +52,10 @@ indicación): `/home/dicov/Conty` (fallback universal),
   (40 pruebas; todo cambio trae su prueba).
 - `tests/`: `mkdemo.sh` genera `fixture/` (gitignored) desde `demo-src/`;
   `run-tests.sh` usa HOME temporal, nunca toca el sistema.
+- `tools/`: `anylinux2repo.sh` (AppImage→repo), `graft-libs.sh` (injerto
+  glibc), `mkanylinux-catalog.sh` + `catalog-one.sh` (generan
+  `catalog/anylinux/index.tsv`, solo-índice con URLs absolutas; refresco
+  semanal en `.github/workflows/catalog.yml`).
 - `packaging/`: `xbps-create.sh` (build directo del `.xbps`),
   `void-packages/srcpkgs/altore/template` (para xbps-src),
   `sign-repo.sh` + `SIGNING.md` (firmado obligatorio; la privada jamás se

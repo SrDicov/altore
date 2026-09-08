@@ -14,7 +14,7 @@
 #
 # Hace: extrae (--appimage-extract, sin FUSE) → [injerto] → normaliza
 # Hidden, AppRun ejecutable, Exec relativo) → empaqueta pool/ →
-# añade/sustituye la fila en index.tsv. Ver docs/09-repos.md §5.
+# añade/sustituye la fila en index.tsv. Ver docs/09-repos.md §6.
 set -u
 
 [ $# -ge 5 ] || { echo "uso: $0 <AppImage> <dir-repo> <nombre> <versión> \"<desc>\" [bins]" >&2; exit 2; }
