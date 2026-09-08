@@ -67,7 +67,10 @@ no exige estructura interna concreta: enlaza **todo** el árbol tal cual.
 1. Tomar el AppImage sharun de pkgforge + su digest publicado.
 2. Verificar digest. Extraer AppDir (`--appimage-extract`).
 3. Normalizar: `AppRun` ejecutable, `.desktop` con `Exec` = binario principal
-   sin rutas absolutas, icono presente.
+   sin rutas absolutas y sin `Hidden=true`, icono presente. **No ejecutar el
+   AppDir antes de empaquetar** (o podar `__pycache__`: Python genera `.pyc`
+   en la primera ejecución y engordan el paquete varios MB; la herramienta
+   `tools/anylinux2repo.sh` ya lo hace).
 4. Empaquetar `tar --zstd -cf pool/<n>-<v>.tar.zst -C <AppDir> .`
    (reproducible: `--sort-name --mtime=@0 --owner=0 --group=0`).
 5. Añadir fila a `index.tsv` con sha256 real. Firmar el commit que lo añade

@@ -47,8 +47,10 @@ Para agentes IA: [`AGENTS.md`](AGENTS.md).
 ## Desarrollo
 
 ```bash
-sh tests/mkdemo.sh     # construye repo demo local (4 paquetes ficticios)
-sh tests/run-tests.sh  # 40 pruebas funcionales (40 ok, 0 fallos en v0.1.0)
+sh tests/mkdemo.sh     # construye repo demo local (5 paquetes ficticios)
+sh tests/run-tests.sh  # 45 pruebas funcionales (45 ok, 0 fallos en v0.1.0)
+sh tools/anylinux2repo.sh <AppImage> <dir-repo> <nombre> <versión> "<desc>"
+                       # convierte un AppImage AnyLinux en paquete del repo
 sh packaging/xbps-create.sh --outdir repo/  # altore-V_R.arch.xbps
 sh packaging/sign-repo.sh repo/             # firma + clave pública
 ```
