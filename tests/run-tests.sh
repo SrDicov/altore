@@ -118,6 +118,26 @@ A -R remoteprobe >/dev/null 2>&1; is_eq "remove remoto rc" "0" "$?"
 out=$(A -i directapp 2>&1); is_eq "install AppImage rc" "0" "$?"
 out=$(A directapp hola 2>&1); is_eq "run AppImage" "HELLO directapp 1.0 args:hola" "$out"
 A -R directapp >/dev/null 2>&1; is_eq "remove AppImage rc" "0" "$?"
+
+# 8d. _fetch_curl por http con resume (servidor local)
+if command -v python3 >/dev/null 2>&1; then
+    ( cd "$ROOT/tests/fixture" && python3 -m http.server 8471 >/dev/null 2>&1 & echo $! >"$T/httpd.pid" )
+    sleep 1
+    need_cmd() { command -v "$1" >/dev/null 2>&1 || return 1; }
+    warn() { printf 'warn: %s\n' "$*" >&2; }
+    eval "$(awk '/^_fetch_curl\(\)/,/^}/' "$ALT")"
+    head -c 100 "$ROOT/tests/fixture/remote/pool/remoteprobe-0.9.tar.gz" >"$T/partial.tgz"
+    _fetch_curl "http://127.0.0.1:8471/remote/pool/remoteprobe-0.9.tar.gz" "$T/partial.tgz"
+    is_eq "fetch http con resume rc" "0" "$?"
+    if cmp -s "$T/partial.tgz" "$ROOT/tests/fixture/remote/pool/remoteprobe-0.9.tar.gz"; then
+        ok "fetch http resume íntegro"
+    else
+        bad "fetch http resume íntegro"
+    fi
+    kill "$(cat "$T/httpd.pid")" 2>/dev/null || true
+else
+    note "sin python3: salto test http"
+fi
 A -i envprobe >/dev/null 2>&1
 out=$(LD_LIBRARY_PATH=/tmp/fake GCONV_PATH=/tmp/fake GDK_PIXBUF_MODULE_FILE=/tmp/fake A -r envprobe 2>&1)
 is_eq "run sanea entorno heredado" "ENV LD=[] GCONV=[] PIXBUF=[]" "$out"

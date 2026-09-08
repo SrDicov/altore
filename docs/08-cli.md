@@ -37,9 +37,12 @@ Sin resultados → código 3 + sugerencia de `update` (índices viejos).
 2. Nombre exacto → instala directo. Si no → candidatos con el motor de `-s`;
    lista numerada + `Elige número (n=ninguno):`; `n` = aborta (código 0,
    "cancelado", sin error).
-3. Descarga a `cache/` (reanuda si existe parcial: `curl -C -`), verifica
-   sha256 (filas de catálogo remoto sin sha: verifica por tamaño y lo dice),
-   extrae, particiona por hash al store (reutiliza existentes), enlaza
+3. Descarga a `cache/` con resume y hasta 5 intentos (aborta conexiones
+   paradas y reintenta; los errores de red se muestran), mostrando el tamaño
+   antes (`descargando X (141.0 MiB)...`). Verifica sha256 (filas de
+   catálogo remoto sin sha: verifica por tamaño y lo dice), extrae en
+   staging dentro de `$ALTORE_HOME` (mismo FS que el store; `/tmp` suele ser
+   tmpfs pequeño) tras comprobar espacio libre (×3 tarball, ×4 AppImage),
    `apps/<nombre>/` con hardlinks, escribe `manifest`, crea shim en
    `~/.local/bin` + `.desktop`, imprime
    `instalado <nombre> <versión> (<tamaño nuevo en disco>)`. Los bins no

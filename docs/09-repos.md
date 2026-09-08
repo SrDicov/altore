@@ -128,7 +128,8 @@ $ALTORE_HOME/
   index.tsv                  # unificado: <repo>\t + fila original
   store/<hh>/<sha256>        # blobs por contenido, a-w
   apps/<nombre>/             # árbol por hardlinks + manifest + blobs.tsv
-  cache/<nombre>-<versión>.tar.*  # descargas (reanudables con curl -C -)
+  cache/<nombre>-<versión>.tar.*  # descargas (resume + 5 intentos)
+  .stage-<pid>/                  # staging de instalación (mismo FS, se borra solo)
 ```
 
 `apps/<nombre>/manifest` (parseable por shell, valores con comilla simple):

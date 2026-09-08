@@ -27,19 +27,23 @@ REPOSD="$ALTORE_HOME/repos"
 INDEX="$ALTORE_HOME/index.tsv"
 
 TMPD=""
+STAGED=""
 
 # ---------- utilidades ----------
 
 die()  { printf 'alt: error: %s\n' "$*" >&2; exit 1; }
 warn() { printf 'alt: aviso: %s\n' "$*" >&2; }
 note() { printf 'alt: %s\n' "$*" >&2; }
-usage_err() { printf 'alt: %s\natl: usa `alt -h` para ayuda.\n' "$*" >&2; exit 2; }
+usage_err() { printf 'alt: %s\nalt: usa `alt -h` para ayuda.\n' "$*" >&2; exit 2; }
 
 need_cmd() {
     command -v "$1" >/dev/null 2>&1 || die "falta herramienta requerida: $1"
 }
 
-cleanup() { [ -n "$TMPD" ] && [ -d "$TMPD" ] && rm -rf "$TMPD"; }
+cleanup() {
+    [ -n "$TMPD" ] && [ -d "$TMPD" ] && rm -rf "$TMPD"
+    [ -n "$STAGED" ] && [ -d "$STAGED" ] && rm -rf "$STAGED"
+}
 trap cleanup EXIT INT TERM
 
 mktmp() {
@@ -270,6 +274,26 @@ installed_version() {
 
 # ---------- descarga e instalación ----------
 
+# _fetch_curl <url> <dest>: descarga con resume y 5 intentos.
+# Si el parcial falla 2 veces seguidas se descarta (quedó obsoleto) y se
+# empieza de cero. Los errores de curl se muestran (-sS); el progreso no.
+_fetch_curl() {
+    _u="$1"; _d="$2"; _a=0; _rfails=0
+    need_cmd curl
+    while [ "$_a" -lt 5 ]; do
+        _a=$((_a+1))
+        if [ -f "$_d" ]; then
+            if curl -fSL -sS --speed-limit 5000 --speed-time 120 -C - -o "$_d" "$_u"; then return 0; fi
+            _rfails=$((_rfails+1))
+            if [ "$_rfails" -ge 2 ]; then rm -f "$_d"; _rfails=0; fi
+        else
+            if curl -fSL -sS --speed-limit 5000 --speed-time 120 -o "$_d" "$_u"; then return 0; fi
+        fi
+        [ "$_a" -lt 5 ] && { warn "descarga interrumpida (intento $_a/5), reintentando…"; sleep 2; }
+    done
+    return 1
+}
+
 # fetch <repo> <url-rel-o-absoluta> <dest>
 # Si la URL es absoluta (http://, https://, file://) se usa tal cual
 # (filas de catálogo remoto); si no, relativa a la raíz del repo.
@@ -277,13 +301,7 @@ fetch_pkg() {
     _repo="$1"; _rel="$2"; _dest="$3"
     case "$_rel" in
         http://*|https://*)
-            need_cmd curl
-            if [ -f "$_dest" ]; then
-                curl -fSL --retry 3 -C - -o "$_dest" "$_rel" 2>/dev/null || \
-                curl -fSL --retry 3 -o "$_dest" "$_rel" 2>/dev/null || return 1
-            else
-                curl -fSL --retry 3 -o "$_dest" "$_rel" 2>/dev/null || return 1
-            fi
+            _fetch_curl "$_rel" "$_dest" || return 1
             return 0
             ;;
         file://*)
@@ -298,13 +316,8 @@ fetch_pkg() {
             cp -f "${_root#file://}/$_rel" "$_dest" || return 1
             ;;
         http://*|https://*)
-            need_cmd curl
-            if [ -f "$_dest" ]; then
-                curl -fSL --retry 3 -C - -o "$_dest" "$_root/$_rel" 2>/dev/null || \
-                curl -fSL --retry 3 -o "$_dest" "$_root/$_rel" 2>/dev/null || return 1
-            else
-                curl -fSL --retry 3 -o "$_dest" "$_root/$_rel" 2>/dev/null || return 1
-            fi
+            _fetch_curl "$_root/$_rel" "$_dest" || return 1
+            return 0
             ;;
         *) warn "URL de repo no soportada: $_root"; return 1 ;;
     esac
@@ -449,7 +462,11 @@ install_row() {
     if [ "$_cached_ok" -eq 1 ]; then
         note "reutilizando descarga en caché"
     else
-        note "descargando $_name $_ver [$_repo]..."
+        if [ -n "$_size" ]; then
+            note "descargando $_name $_ver [$_repo] ($(human_size "$_size"))..."
+        else
+            note "descargando $_name $_ver [$_repo]..."
+        fi
         fetch_pkg "$_repo" "$_rel" "$_file" || \
             { warn "descarga fallida de $_name"; return 4; }
         if [ -n "$_sha" ]; then
@@ -467,33 +484,46 @@ install_row() {
     fi
 
     _t=$(mktmp)
-    mkdir -p "$_t/stage" || return 1
+    # Staging en ALTORE_HOME (mismo FS que el store; /tmp suele ser tmpfs
+    # pequeño y la extracción de un AppImage grande lo llena).
+    mkdir -p "$ALTORE_HOME" || return 1
+    STAGED="$ALTORE_HOME/.stage-$$"
+    rm -rf "$STAGED"; mkdir -p "$STAGED/stage" || return 1
+    _stage="$STAGED/stage"
+    # Espacio previo (heurística: descarga + extracción ≈ tamaño×3 en
+    # tarballs, ×4 en AppImage). Evita fallos crípticos a mitad.
+    if [ -n "$_size" ] && [ "$_size" -gt 0 ] 2>/dev/null; then
+        _factor=3; [ "$_ext" = "AppImage" ] && _factor=4
+        _need=$((_size*_factor)); _free=$(df -k "$ALTORE_HOME" 2>/dev/null | awk 'NR==2{print $4*1024}')
+        if [ -n "$_free" ] && [ "$_free" -lt "$_need" ] 2>/dev/null; then
+            die "sin espacio suficiente en $ALTORE_HOME (libres $(human_size "$_free"), necesarios ~$(human_size "$_need") para descargar+extraer)"
+        fi
+    fi
     if [ "$_ext" = "AppImage" ]; then
         # Fila de catálogo remoto: el artefacto ES el AppImage; se extrae
         # aquí mismo (equivale a tools/anylinux2repo.sh sin normalizar).
         chmod +x "$_file"
-        ( cd "$_t" && "$_file" --appimage-extract >/dev/null 2>&1 ) || \
-            { warn "no se pudo extraer $_name (AppImage dañado o runtime incompatible)"; return 1; }
-        _appdir=$(cd "$_t/squashfs-root" 2>/dev/null && pwd -P) || \
+        ( cd "$STAGED" && "$_file" --appimage-extract >/dev/null 2>&1 ) || \
+            { warn "no se pudo extraer $_name (AppImage dañado, sin espacio o runtime incompatible)"; return 1; }
+        _appdir=$(cd "$STAGED/squashfs-root" 2>/dev/null && pwd -P) || \
             { warn "extracción sin AppDir para $_name"; return 1; }
-        _t_stage="$_t/stage"
         # Copia el contenido (resolviendo el posible symlink de uruntime).
-        ( cd "$_appdir" && tar -cf - . ) 2>/dev/null | ( cd "$_t_stage" && tar -xf - ) 2>/dev/null || \
+        ( cd "$_appdir" && tar -cf - . ) 2>/dev/null | ( cd "$_stage" && tar -xf - ) 2>/dev/null || \
             { warn "no se pudo leer el AppDir de $_name"; return 1; }
     else
-        tar -xf "$_file" -C "$_t/stage" 2>/dev/null || \
+        tar -xf "$_file" -C "$_stage" 2>/dev/null || \
             { warn "no se pudo extraer $_name"; return 1; }
     fi
-    [ -x "$_t/stage/AppRun" ] || \
+    [ -x "$_stage/AppRun" ] || \
         { warn "paquete $_name inválido: falta AppRun ejecutable"; return 1; }
 
     [ -n "$_have" ] && { note "actualizando $_name $_have → $_ver"; rm -rf "${APPS:?}/${_name:?}"; }
     mkdir -p "$APPS/$_name" || return 1
-    _new=$(cas_link "$_t/stage" "$APPS/$_name" "$APPS/$_name/blobs.tsv")
+    _new=$(cas_link "$_stage" "$APPS/$_name" "$APPS/$_name/blobs.tsv")
 
     # Bins no declarados (catálogo remoto): se descubren del .desktop.
     if [ -z "$_bins" ]; then
-        _ddesk=$(find "$_t/stage" -maxdepth 2 -name '*.desktop' 2>/dev/null | head -1)
+        _ddesk=$(find "$_stage" -maxdepth 2 -name '*.desktop' 2>/dev/null | head -1)
         [ -n "$_ddesk" ] || { warn "paquete $_name inválido: sin .desktop ni bins declarados"; rm -rf "${APPS:?}/${_name:?}"; return 1; }
         _bins=$(grep -m1 '^Exec=' "$_ddesk" | cut -d= -f2 | awk '{print $1}')
         [ -n "$_bins" ] || { warn "paquete $_name inválido: .desktop sin Exec"; rm -rf "${APPS:?}/${_name:?}"; return 1; }
@@ -512,8 +542,8 @@ EOF
     _self=$(self_path)
     _main=$(printf '%s' "$_bins" | cut -d, -f1)
     [ -n "$_main" ] || _main="$_name"
-    if [ -z "$(find "$_t/stage" -name 'ld-linux-*.so*' 2>/dev/null | head -1)" ]; then
-        if [ "$(head -c2 "$_t/stage/AppRun" 2>/dev/null)" = "#!" ]; then
+    if [ -z "$(find "$_stage" -name 'ld-linux-*.so*' 2>/dev/null | head -1)" ]; then
+        if [ "$(head -c2 "$_stage/AppRun" 2>/dev/null)" = "#!" ]; then
             warn "$_name parece un AppImage clásico sin glibc propia: puede no correr en musl"
             note "si falla al ejecutar, conviértelo con injerto (tools/anylinux2repo.sh --graft-from …)"
         else
