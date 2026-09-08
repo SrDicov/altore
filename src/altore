@@ -11,6 +11,10 @@
 
 set -u
 
+# shellcheck disable=SC1090
+# (los `manifest` que se importan con `.` los genera el propio altore al
+# instalar; mismo dominio de confianza, no hay source externo).
+
 ALTORE_VERSION="0.1.0"
 
 : "${ALTORE_HOME:=$HOME/.local/share/altore}"
@@ -399,7 +403,7 @@ install_row() {
     [ -x "$_t/stage/AppRun" ] || \
         { warn "paquete $_name inválido: falta AppRun ejecutable"; return 1; }
 
-    [ -n "$_have" ] && { note "actualizando $_name $_have → $_ver"; rm -rf "$APPS/$_name"; }
+    [ -n "$_have" ] && { note "actualizando $_name $_have → $_ver"; rm -rf "${APPS:?}/${_name:?}"; }
     mkdir -p "$APPS/$_name" || return 1
     _new=$(cas_link "$_t/stage" "$APPS/$_name" "$APPS/$_name/blobs.tsv")
 
@@ -438,7 +442,7 @@ do_remove() {
     if [ -f "$_m" ]; then
         _bins=$( ( unset bins; . "$_m"; printf '%s' "${bins:-}" ) )
     fi
-    rm -rf "$APPS/$_name"
+    rm -rf "${APPS:?}/${_name:?}"
     _oldifs="$IFS"; IFS=','
     for _b in $_bins; do
         [ -n "$_b" ] && rm -f "$ALTORE_BIN/$_b"
