@@ -115,18 +115,19 @@ if [ -d "$APP/usr/share/nvim/runtime" ]; then
     printf 'VIMRUNTIME=$here/usr/share/nvim/runtime\n' >"$APP/altore.env"
     echo "nota: altore.env con VIMRUNTIME (neovim localiza su runtime por exe)" >&2
 fi
+# Libdirs reales del árbol (nada hardcodeado: solo las que existen).
+_LPDIRS=""
+for _ld in lib usr/lib lib64 usr/lib64; do
+    [ -d "$APP/$_ld" ] && _LPDIRS="$_LPDIRS:\$here/$_ld"
+done
+_LPDIRS=$(printf '%s' "$_LPDIRS" | sed 's/^://')
 cat >"$APP/AppRun" <<EOF
 #!/bin/sh
 # Generado por alt graft-libs: usa la glibc injertada en ./lib, no la del host.
 here=\$(dirname "\$(readlink -f "\$0" 2>/dev/null || echo "\$0")")
 if [ -f "\$here/altore.env" ]; then set -a; . "\$here/altore.env"; set +a; fi
-lp=""
-for d in lib usr/lib lib64 usr/lib64; do
-    [ -d "\$here/\$d" ] && lp="\$lp:\$here/\$d"
-done
-lp=\$(printf '%s' "\$lp" | sed 's/^://')
 unset LD_LIBRARY_PATH GCONV_PATH GDK_PIXBUF_MODULE_FILE
-exec "\$here/lib/$LOADER_NAME" --library-path "\$lp" "\$here/$_RELBIN" "\$@"
+exec "\$here/lib/$LOADER_NAME" --library-path "$_LPDIRS" "\$here/$_RELBIN" "\$@"
 EOF
 chmod +x "$APP/AppRun"
 

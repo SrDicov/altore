@@ -19,6 +19,8 @@ ALTORE_VERSION="0.1.0"
 : "${ALTORE_HOME:=$HOME/.local/share/altore}"
 : "${ALTORE_BIN:=$HOME/.local/bin}"
 : "${ALTORE_REPOS:=$ALTORE_HOME/repos.conf}"
+: "${ALTORE_INDEX_TTL_DAYS:=7}"
+: "${ALTORE_FETCH_RETRIES:=5}"
 
 STORE="$ALTORE_HOME/store"
 APPS="$ALTORE_HOME/apps"
@@ -151,8 +153,8 @@ ensure_index() {
         [ -s "$INDEX" ] || die "los repos no ofrecen paquetes"
     fi
     if [ -f "$ALTORE_HOME/.last-sync" ] && \
-       find "$ALTORE_HOME/.last-sync" -mtime +7 2>/dev/null | grep -q .; then
-        warn "índices de hace >7 días; ejecuta \`alt -u\` para refrescar"
+       find "$ALTORE_HOME/.last-sync" -mtime +"${ALTORE_INDEX_TTL_DAYS:-7}" 2>/dev/null | grep -q .; then
+        warn "índices de hace >${ALTORE_INDEX_TTL_DAYS:-7} días; ejecuta \`alt -u\` para refrescar"
     fi
 }
 
@@ -280,7 +282,9 @@ installed_version() {
 _fetch_curl() {
     _u="$1"; _d="$2"; _a=0; _rfails=0
     need_cmd curl
-    while [ "$_a" -lt 5 ]; do
+    _retries="${ALTORE_FETCH_RETRIES:-5}"
+    case "$_retries" in ''|*[!0-9]*) _retries=5;; esac
+    while [ "$_a" -lt "$_retries" ]; do
         _a=$((_a+1))
         if [ -f "$_d" ]; then
             if curl -fSL -sS --speed-limit 5000 --speed-time 120 -C - -o "$_d" "$_u"; then return 0; fi
@@ -289,7 +293,7 @@ _fetch_curl() {
         else
             if curl -fSL -sS --speed-limit 5000 --speed-time 120 -o "$_d" "$_u"; then return 0; fi
         fi
-        [ "$_a" -lt 5 ] && { warn "descarga interrumpida (intento $_a/5), reintentando…"; sleep 2; }
+        [ "$_a" -lt "$_retries" ] && { warn "descarga interrumpida (intento $_a/$_retries), reintentando…"; sleep 2; }
     done
     return 1
 }
@@ -328,6 +332,13 @@ verify_sha() {
     need_cmd sha256sum
     _got=$(sha256sum "$1" | awk '{print $1}')
     [ "$_got" = "$2" ]
+}
+
+# _is_appimage <fichero>: 0 si es ELF (los AppImage lo son; los tarballs no).
+# La rama de instalación se decide por contenido, no por extensión.
+_is_appimage() {
+    need_cmd od
+    [ "$(head -c4 "$1" 2>/dev/null | od -An -tx1 2>/dev/null | tr -d ' \n')" = "7f454c46" ]
 }
 
 # cas_link <staging> <dest> <blobs> — particiona al store, enlaza árbol.
@@ -499,13 +510,30 @@ install_row() {
             die "sin espacio suficiente en $ALTORE_HOME (libres $(human_size "$_free"), necesarios ~$(human_size "$_need") para descargar+extraer)"
         fi
     fi
-    if [ "$_ext" = "AppImage" ]; then
-        # Fila de catálogo remoto: el artefacto ES el AppImage; se extrae
+    if _is_appimage "$_file"; then
+        _img=1
+    elif tar -tf "$_file" >/dev/null 2>&1; then
+        _img=0
+    elif [ -x "$_file" ]; then
+        # Ejecutable no-ELF (p. ej. AppImage-script): se intenta extraer.
+        _img=1
+    else
+        warn "no se pudo extraer $_name (formato desconocido)"
+        rm -f "$_file"; return 1
+    fi
+    if [ "$_img" -eq 1 ]; then
+        # El artefacto ES un AppImage (típico en catálogo remoto): se extrae
         # aquí mismo (equivale a tools/anylinux2repo.sh sin normalizar).
         chmod +x "$_file"
         ( cd "$STAGED" && "$_file" --appimage-extract >/dev/null 2>&1 ) || \
             { warn "no se pudo extraer $_name (AppImage dañado, sin espacio o runtime incompatible)"; return 1; }
-        _appdir=$(cd "$STAGED/squashfs-root" 2>/dev/null && pwd -P) || \
+        # El runtime clásico extrae a squashfs-root; uruntime a AppDir.
+        _exdir=""
+        for _c in squashfs-root AppDir; do
+            if [ -d "$STAGED/$_c" ]; then _exdir="$_c"; break; fi
+        done
+        [ -n "$_exdir" ] || { warn "extracción sin AppDir para $_name"; return 1; }
+        _appdir=$(cd "$STAGED/$_exdir" && pwd -P) || \
             { warn "extracción sin AppDir para $_name"; return 1; }
         # Copia el contenido (resolviendo el posible symlink de uruntime).
         ( cd "$_appdir" && tar -cf - . ) 2>/dev/null | ( cd "$_stage" && tar -xf - ) 2>/dev/null || \
@@ -522,11 +550,22 @@ install_row() {
     _new=$(cas_link "$_stage" "$APPS/$_name" "$APPS/$_name/blobs.tsv")
 
     # Bins no declarados (catálogo remoto): se descubren del .desktop.
+    # El Exec puede traer ruta absoluta (/opt/...), env o %U: se queda el
+    # basename del primer token ejecutable.
     if [ -z "$_bins" ]; then
         _ddesk=$(find "$_stage" -maxdepth 2 -name '*.desktop' 2>/dev/null | head -1)
         [ -n "$_ddesk" ] || { warn "paquete $_name inválido: sin .desktop ni bins declarados"; rm -rf "${APPS:?}/${_name:?}"; return 1; }
-        _bins=$(grep -m1 '^Exec=' "$_ddesk" | cut -d= -f2 | awk '{print $1}')
-        [ -n "$_bins" ] || { warn "paquete $_name inválido: .desktop sin Exec"; rm -rf "${APPS:?}/${_name:?}"; return 1; }
+        _bins=""
+        for _tok in $(grep -m1 '^Exec=' "$_ddesk" | cut -d= -f2-); do
+            case "$_tok" in
+                %*|*=*|env) continue ;;
+                *) _bins=$(basename "$_tok"); break ;;
+            esac
+        done
+        [ -n "$_bins" ] || { warn "paquete $_name inválido: .desktop sin ejecutable en Exec"; rm -rf "${APPS:?}/${_name:?}"; return 1; }
+        if [ -z "$(find "$_stage" -type f -name "$_bins" -perm -111 2>/dev/null | head -1)" ]; then
+            warn "$_name: no se halla ejecutable $_bins en el paquete (el shim puede no funcionar)"
+        fi
         note "binarios descubiertos: $_bins"
     fi
 

@@ -46,7 +46,10 @@ Sin resultados → código 3 + sugerencia de `update` (índices viejos).
    `apps/<nombre>/` con hardlinks, escribe `manifest`, crea shim en
    `~/.local/bin` + `.desktop`, imprime
    `instalado <nombre> <versión> (<tamaño nuevo en disco>)`. Los bins no
-   declarados (catálogo remoto) se descubren del `.desktop` al instalar.
+   declarados (catálogo remoto) se descubren del `.desktop` al instalar
+   (primer token ejecutable del `Exec`, reducido a basename: vale
+   `Exec=/opt/x/bin/x`). La rama AppImage-vs-tarball se decide por contenido
+   (magia ELF), no por extensión.
 4. Si ya instalado en igual versión → "ya instalado", código 0. Si hay
    versión mayor → propone actualizar (mismo prompt; `n` cancela).
 
@@ -112,6 +115,8 @@ instaladas. Código 0 siempre (con `nada que limpiar` si aplica).
 - `ALTORE_REPOS` (defecto `$ALTORE_HOME/repos.conf`): fichero de repos.
 - `ALTORE_NONINTERACTIVE=1`: ningún prompt; ambigüedad = error (código 3).
   Para scripts/CI.
+- `ALTORE_INDEX_TTL_DAYS` (defecto 7): aviso de índices viejos.
+- `ALTORE_FETCH_RETRIES` (defecto 5): intentos de descarga con resume.
 
 ## 3. Red e índices
 

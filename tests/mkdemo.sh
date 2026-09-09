@@ -109,3 +109,28 @@ size=$(stat -c%s "$RPOOL/directapp-1.0.AppImage")
 printf 'directapp\t1.0\tAppImage falso para tests\t%s\t\tfile://%s/directapp-1.0.AppImage\t\n' \
     "$size" "$RPOOL" >>"$ROUT/index.tsv"
 echo "demo: AppImage falso en $RPOOL/directapp-1.0.AppImage"
+
+# Paquete con Exec absoluto (/opt/...): los bins se reducen a basename.
+st4=$(mktemp -d)
+mkdir -p "$st4/opt/abspath/bin"
+printf '#!/bin/sh\necho "HELLO abspath 1.0 args:$*"\n' >"$st4/opt/abspath/bin/abspath"
+chmod +x "$st4/opt/abspath/bin/abspath"
+printf '#!/bin/sh\nexec "$(dirname "$0")/opt/abspath/bin/abspath" "$@"\n' >"$st4/AppRun"
+chmod +x "$st4/AppRun"
+cat >"$st4/abspath.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=abspath
+Comment=Exec absoluto para tests
+Exec=/opt/abspath/bin/abspath %U
+Icon=icon.png
+Categories=Utility;
+EOF
+printf 'fake-icon-abs' >"$st4/icon.png"
+tar -czf "$RPOOL/abspath-1.0.tar.gz" -C "$st4" .
+rm -rf "$st4"
+size=$(stat -c%s "$RPOOL/abspath-1.0.tar.gz")
+sha=$(sha256sum "$RPOOL/abspath-1.0.tar.gz" | awk '{print $1}')
+printf 'abspath\t1.0\tExec absoluto para tests\t%s\t%s\tpool/abspath-1.0.tar.gz\t\n' \
+    "$size" "$sha" >>"$ROUT/index.tsv"
+echo "demo: paquete abspath en repo remoto"

@@ -28,7 +28,7 @@ contains() { # contains <desc> <aguja> <pajar>
 A() { sh "$ALT" "$@"; }  # invoca altore con dash (igual que /bin/sh)
 
 # 1. sync + search
-out=$(A -u 2>&1); contains "sync inicial" "7 paquetes conocidos" "$out"
+out=$(A -u 2>&1); contains "sync inicial" "8 paquetes conocidos" "$out"
 out=$(A -s brave 2>&1); rc=$?
 is_eq "search brave rc" "0" "$rc"
 contains "search brave halla brave-bin" "brave-bin" "$out"
@@ -119,7 +119,13 @@ out=$(A -i directapp 2>&1); is_eq "install AppImage rc" "0" "$?"
 out=$(A directapp hola 2>&1); is_eq "run AppImage" "HELLO directapp 1.0 args:hola" "$out"
 A -R directapp >/dev/null 2>&1; is_eq "remove AppImage rc" "0" "$?"
 
-# 8d. _fetch_curl por http con resume (servidor local)
+# 8d. Exec absoluto (/opt/...) → shim con basename
+out=$(A -i abspath 2>&1); is_eq "install abspath rc" "0" "$?"
+[ -x "$ALTORE_BIN/abspath" ] && ok "shim abspath (basename)" || bad "shim abspath (basename)"
+out=$(A abspath hola 2>&1); is_eq "run abspath" "HELLO abspath 1.0 args:hola" "$out"
+A -R abspath >/dev/null 2>&1; is_eq "remove abspath rc" "0" "$?"
+
+# 8e. _fetch_curl por http con resume (servidor local)
 if command -v python3 >/dev/null 2>&1; then
     ( cd "$ROOT/tests/fixture" && python3 -m http.server 8471 >/dev/null 2>&1 & echo $! >"$T/httpd.pid" )
     sleep 1
